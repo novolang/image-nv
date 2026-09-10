@@ -62,6 +62,6 @@ novo        = ">= 0.8.9"
 # coordinator converts each to `^0.0.1` before publish, and publishes
 # them in dependency order — color-nv, then qoi-nv and png-nv, then
 # this.
-png-nv   = { path = "../png-nv" }
-qoi-nv   = { path = "../qoi-nv" }
+png-nv   = "^0.0.1"
+qoi-nv   = "^0.0.1"
 color-nv = "^0.0.1"
