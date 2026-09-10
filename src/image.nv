@@ -1,0 +1,335 @@
+// image.nv — a decoded image: dimensions, a colour model, and a flat
+// buffer of samples.
+//
+// WHY THE PIXELS ARE BYTES AND NOT COLOURS
+//
+// A 4K RGBA image is 33 million bytes.  As a list of colour values —
+// one heap cell per pixel, a reference count on each — it is somewhere
+// north of half a gigabyte, and every operation on it walks pointers.
+// So `Image` holds ONE `Bytes` and a `PixelKind` that says how to read
+// it, and `pixel` is the accessor for the caller who wants a colour at
+// a coordinate rather than a buffer.
+//
+// This is also what makes the whole imaging stack agree with itself:
+// png-nv's `PngEvRow` drains raw samples, qoi-nv's decoder drains raw
+// samples, and this is where they land without a conversion in
+// between.
+//
+// WHY THE COLOUR MODEL IS AN ENUM AND NOT A COLOUR SPACE
+//
+// `PixelKind` says how many channels a pixel has and how wide they
+// are.  It does NOT say what space they are in — that is color-nv's
+// `ColorSpace`, and the answer is sRGB for every format on this grid
+// unless a chunk said otherwise.  Keeping the two apart is what stops
+// this package from inventing a colour management story it cannot
+// implement: an image whose PNG carried a gAMA is still `PixRgb8`, and
+// what to do about the gamma is the caller's decision with color-nv's
+// help.
+//
+// EIGHT KINDS, AND WHY NOT MORE
+//
+// Grey and RGB, each with and without alpha, each at 8 and 16 bits per
+// channel.  That covers every colour type PNG has after a palette is
+// resolved, everything QOI produces, and everything a baseline JPEG
+// decodes to.  What is deliberately absent is a PALETTE kind: an
+// indexed image is a compression of a `PixRgba8` one, png-nv is where
+// the palette is resolved, and an `Image` that could be indexed would
+// put a branch in every operation in `imageops` for the sake of a
+// representation only one format has.
+
+use srgb
+
+// How the samples of a pixel are laid out.
+//
+// Channel order is R, G, B, A — the order every format on this grid
+// stores and the order a framebuffer word does not (see
+// `srgb.unpack_argb`).  Sixteen-bit samples are BIG-endian, which is
+// PNG's order and is what a decoder hands over without a swap.
+//
+// ```novo
+// use image
+//
+// fn main() [io]
+//     println("${image.bytes_per_pixel(PixRgba8)}")        // 4
+// ```
+pub enum PixelKind
+    // One 8-bit greyscale sample.
+    PixLuma8
+    // An 8-bit greyscale sample and an 8-bit alpha.
+    PixLumaAlpha8
+    // Three 8-bit samples: red, green, blue.
+    PixRgb8
+    // Four 8-bit samples: red, green, blue, alpha.
+    PixRgba8
+    // One 16-bit greyscale sample, big-endian.
+    PixLuma16
+    // A 16-bit greyscale sample and a 16-bit alpha, big-endian.
+    PixLumaAlpha16
+    // Three 16-bit samples, big-endian.
+    PixRgb16
+    // Four 16-bit samples, big-endian.
+    PixRgba16
+
+// A decoded image.
+//
+// The three facts that make a flat buffer readable — how wide, how
+// tall, and how a pixel is laid out — beside the buffer itself.  Rows
+// are contiguous and in raster order with NO padding between them, so
+// the stride is exactly `width * bytes_per_pixel` and a caller may
+// treat the whole buffer as one run when they do not care about rows.
+//
+// ```novo
+// use image
+//
+// fn main() [io]
+//     let img = image.new(2, 2, PixRgba8)
+//     println("${image.byte_size(img)}")                   // 16
+// ```
+pub struct Image
+    // Width in pixels.  Always at least 1: `new` refuses zero, because
+    // an image with no pixels has no buffer that could be correct.
+    width: Int
+    // Height in pixels.  Always at least 1.
+    height: Int
+    // How a pixel is laid out.
+    kind: PixelKind
+    // The samples, in raster order, `height * stride` bytes.
+    samples: Bytes
+
+// How many channels a pixel of this kind carries.
+//
+// ```novo
+// use image
+//
+// fn main() [io]
+//     println("${image.channel_count(PixLumaAlpha16)}")    // 2
+// ```
+pub fn channel_count(k: PixelKind) -> Int
+    todo("image-nv.image.channel_count")
+
+// How many bytes one channel of this kind occupies: 1 or 2.
+//
+// ```novo
+// use image
+//
+// fn main() [io]
+//     println("${image.bytes_per_sample(PixRgb16)}")       // 2
+// ```
+pub fn bytes_per_sample(k: PixelKind) -> Int
+    todo("image-nv.image.bytes_per_sample")
+
+// How many bytes one pixel of this kind occupies: 1 to 8.
+//
+// ```novo
+// use image
+//
+// fn main() [io]
+//     println("${image.bytes_per_pixel(PixLuma8)}")        // 1
+// ```
+pub fn bytes_per_pixel(k: PixelKind) -> Int
+    todo("image-nv.image.bytes_per_pixel")
+
+// Whether pixels of this kind carry an alpha channel.
+//
+// ```novo
+// use image
+//
+// fn main() [io]
+//     println("${image.has_alpha(PixRgb8)}")               // false
+// ```
+pub fn has_alpha(k: PixelKind) -> Bool
+    todo("image-nv.image.has_alpha")
+
+// Whether pixels of this kind carry one colour channel rather than
+// three.
+//
+// ```novo
+// use image
+//
+// fn main() [io]
+//     println("${image.is_grey(PixLumaAlpha8)}")           // true
+// ```
+pub fn is_grey(k: PixelKind) -> Bool
+    todo("image-nv.image.is_grey")
+
+// The kind with an alpha channel added, or the same kind when it has
+// one.
+//
+// `PixRgb8` becomes `PixRgba8`, `PixLuma16` becomes `PixLumaAlpha16`.
+// What a caller compositing onto an image asks for before they start,
+// and what `imagecodec.decode` uses to widen a three-channel QOI file
+// a caller asked for as RGBA.
+//
+// ```novo
+// use image
+//
+// fn main() [io]
+//     println("${image.bytes_per_pixel(image.with_alpha_channel(PixRgb8))}")   // 4
+// ```
+pub fn with_alpha_channel(k: PixelKind) -> PixelKind
+    todo("image-nv.image.with_alpha_channel")
+
+// The stride of an image: bytes from the start of one row to the next.
+//
+// `width * bytes_per_pixel`, exactly — this package puts no padding
+// between rows, which is a decision rather than a coincidence.  A
+// four-byte-aligned stride is what a graphics API wants and what a
+// codec does not, and a caller who needs one copies rows into a buffer
+// of their own rather than every operation here carrying a stride
+// field.
+//
+// ```novo
+// use image
+//
+// fn main() [io]
+//     println("${image.stride(image.new(3, 1, PixRgb8))}") // 9
+// ```
+pub fn stride(img: Image) -> Int
+    todo("image-nv.image.stride")
+
+// How many bytes an image's buffer holds: `height * stride`.
+//
+// ```novo
+// use image
+//
+// fn main() [io]
+//     println("${image.byte_size(image.new(2, 3, PixLuma8))}")     // 6
+// ```
+pub fn byte_size(img: Image) -> Int
+    todo("image-nv.image.byte_size")
+
+// An image of these dimensions with every byte zero.
+//
+// Zero means transparent black for a kind with alpha and opaque black
+// for one without, which is the difference a caller filling a canvas
+// has to know: `image.new(w, h, PixRgb8)` is black and
+// `image.new(w, h, PixRgba8)` is nothing at all.
+//
+// A width or height below 1 PANICS rather than returning a `Result`.
+// An image with no pixels is a bug at the point it was asked for, not
+// a condition to handle at the point it is drawn.
+//
+// ```novo
+// use image
+//
+// fn main() [io]
+//     println("${image.new(4, 4, PixRgba8).width}")        // 4
+// ```
+pub fn new(width: Int, height: Int, k: PixelKind) -> Image
+    todo("image-nv.image.new")
+
+// An image of these dimensions with every pixel the same colour.
+//
+// The pixel is given as an `Srgba8` and converted to the image's kind
+// on the way in, so filling a `PixLuma8` image with a colour takes
+// its luminance and filling a `PixRgb8` one drops its alpha — the same
+// conversions `imageops.convert` does, applied once.
+//
+// ```novo
+// use image
+// use srgb
+//
+// fn main() [io]
+//     let img = image.filled(2, 2, PixRgba8, srgb.opaque(srgb.white()))
+//     println("${image.byte_size(img)}")                   // 16
+// ```
+pub fn filled(width: Int, height: Int, k: PixelKind, px: Srgba8) -> Image
+    todo("image-nv.image.filled")
+
+// An image over a buffer the caller already has.
+//
+// The way a decoder's output becomes an `Image` without a copy, and
+// the way a caller who generated samples themselves hands them over.
+// `None` when the buffer is not exactly `height * stride` bytes — a
+// buffer of the wrong size is a caller's arithmetic error, and
+// accepting it would put an out-of-range read in every later
+// operation.
+//
+// ```novo
+// use image
+//
+// fn main() [io]
+//     match image.from_samples(2, 2, PixLuma8, bytes.zeros(3))
+//         Some(_) => println("accepted")
+//         None    => println("wrong size")                 // this one
+// ```
+pub fn from_samples(width: Int, height: Int, k: PixelKind, samples: Bytes) -> ?Image
+    todo("image-nv.image.from_samples")
+
+// The pixel at a coordinate, as a colour with its alpha.
+//
+// The accessor for a caller reading a few pixels — a colour picker, a
+// test, a corner sample.  It is NOT the way to walk an image: every
+// call converts the image's own layout into an `Srgba8`, which for a
+// 16-bit image means narrowing, and a loop over a million of them is a
+// million conversions.  Walk `samples` with `stride` instead, or use
+// `row`.
+//
+// A 16-bit image's samples are narrowed to 8 bits here, because
+// `Srgba8` is an 8-bit colour.  That is lossy and it is the only place
+// in this package that loses precision without being asked to, which
+// is why it is said here rather than discovered.
+//
+// `None` when the coordinate is outside the image.
+//
+// ```novo
+// use image
+//
+// fn main() [io]
+//     match image.pixel(image.new(2, 2, PixRgba8), 5, 0)
+//         Some(_) => println("inside")
+//         None    => println("outside")                    // this one
+// ```
+pub fn pixel(img: Image, x: Int, y: Int) -> ?Srgba8
+    todo("image-nv.image.pixel")
+
+// An image with one pixel replaced.
+//
+// The colour is converted to the image's own kind, so setting a pixel
+// on a `PixLuma8` image stores its luminance.  A coordinate outside
+// the image answers the image unchanged rather than panicking: a
+// caller drawing near an edge clips rather than checking.
+//
+// ```novo
+// use image
+// use srgb
+//
+// fn main() [io]
+//     let img = image.with_pixel(image.new(2, 2, PixRgba8), 0, 0, srgb.opaque(srgb.white()))
+//     println("${image.byte_size(img)}")                   // 16
+// ```
+pub fn with_pixel(img: Image, x: Int, y: Int, px: Srgba8) -> Image
+    todo("image-nv.image.with_pixel")
+
+// One row of an image's samples, in its own layout.
+//
+// `stride` bytes, unconverted — this is the fast path, and it is what
+// an encoder or a caller writing into a framebuffer wants.  `None`
+// when the row is outside the image.
+//
+// ```novo
+// use image
+//
+// fn main() [io]
+//     match image.row(image.new(2, 2, PixRgb8), 0)
+//         Some(r) => println("${bytes.len(r)}")            // 6
+//         None    => println("outside")
+// ```
+pub fn row(img: Image, y: Int) -> ?Bytes
+    todo("image-nv.image.row")
+
+// An image with one row replaced.
+//
+// The row must be exactly `stride` bytes and in the image's own
+// layout; anything else answers the image unchanged, for the same
+// reason `from_samples` refuses a buffer of the wrong size.
+//
+// ```novo
+// use image
+//
+// fn main() [io]
+//     let img = image.with_row(image.new(2, 2, PixRgb8), 0, bytes.zeros(6))
+//     println("${img.height}")                             // 2
+// ```
+pub fn with_row(img: Image, y: Int, row: Bytes) -> Image
+    todo("image-nv.image.with_row")

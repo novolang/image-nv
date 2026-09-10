@@ -1,0 +1,171 @@
+// imageops_tests.nv — the API suite for the operations on a decoded
+// image.
+//
+// RED ON PURPOSE: every body is a `todo()`.  See image_tests.nv for
+// why an interface package ships a failing suite.
+//
+// These assert SHAPES rather than pixel values, on purpose: what a
+// resize does to a dimension, which operations can fail and which
+// cannot, and where a refusal is preferred to a silent clip.  The
+// pixel values belong to the implementation lane and to Pillow's
+// corpus — a resampling kernel's output is a numerical claim and not
+// an interface one.
+
+use std.test
+use image
+use imageops
+use srgb
+
+@test
+fn test_the_filter_names_are_the_ones_every_tool_uses() [io]
+    test.case("so a caller porting a command line keeps its vocabulary")
+    test.assert(imageops.filter_name(RfNearest) == "nearest")
+    test.assert(imageops.filter_name(RfBox) == "box")
+    test.assert(imageops.filter_name(RfCatmullRom) == "catmull-rom")
+    test.assert(imageops.filter_name(RfLanczos3) == "lanczos3")
+
+@test
+fn test_only_nearest_avoids_averaging_and_therefore_the_gamma_question() [io]
+    test.case("it copies a pixel, so there is nothing to decode")
+    test.assert(imageops.filter_averages(RfNearest) == false)
+
+    test.case("and the other three all average")
+    test.assert(imageops.filter_averages(RfBox))
+    test.assert(imageops.filter_averages(RfCatmullRom))
+    test.assert(imageops.filter_averages(RfLanczos3))
+
+@test
+fn test_the_rotations_are_clockwise_right_angles() [io]
+    test.case("what a photo viewer's rotate button means")
+    test.assert(imageops.rotation_degrees(Rot90) == 90)
+    test.assert(imageops.rotation_degrees(Rot180) == 180)
+    test.assert(imageops.rotation_degrees(Rot270) == 270)
+
+@test
+fn test_a_flip_is_named_for_what_moves() [io]
+    test.case("horizontal swaps left and right")
+    test.assert(imageops.axis_name(FlipHorizontal) == "horizontal")
+    test.assert(imageops.axis_name(FlipVertical) == "vertical")
+
+@test
+fn test_a_resize_gives_exactly_the_dimensions_it_was_asked_for() [io]
+    test.case("the aspect ratio is not preserved — fit_within is that")
+    match imageops.resize(image.new(4, 4, PixRgba8), 7, 2, RfCatmullRom)
+        Ok(out) => test.assert(out.width == 7 and out.height == 2)
+        Err(_)  => test.fail("a 4x4 image could not be resized to 7x2")
+
+    test.case("and the pixel kind survives")
+    match imageops.resize(image.new(4, 4, PixLuma16), 2, 2, RfBox)
+        Ok(out) => test.assert(image.bytes_per_pixel(out.kind) == 2)
+        Err(_)  => test.fail("a 4x4 grey image could not be resized")
+
+@test
+fn test_a_resize_to_nothing_is_refused() [io]
+    test.case("an image with no pixels is not an image")
+    match imageops.resize(image.new(4, 4, PixRgba8), 0, 4, RfBox)
+        Ok(_)                        => test.fail("a zero width was accepted")
+        Err(ImgBadArgument(what, _)) => test.assert(what == "resize")
+        Err(_)                       => test.fail("refused for the wrong reason")
+
+@test
+fn test_fitting_inside_a_box_keeps_the_aspect_ratio() [io]
+    test.case("100x50 into 40x40 is 40x20")
+    match imageops.fit_within(image.new(100, 50, PixRgb8), 40, 40, RfCatmullRom)
+        Ok(out) => test.assert(out.width == 40 and out.height == 20)
+        Err(_)  => test.fail("a 100x50 image could not be fitted")
+
+    test.case("and the tall direction binds when it is the tighter one")
+    match imageops.fit_within(image.new(50, 100, PixRgb8), 40, 40, RfCatmullRom)
+        Ok(out) => test.assert(out.width == 20 and out.height == 40)
+        Err(_)  => test.fail("a 50x100 image could not be fitted")
+
+@test
+fn test_fitting_never_enlarges() [io]
+    test.case("an image already inside the box comes back unchanged")
+    match imageops.fit_within(image.new(10, 10, PixRgb8), 40, 40, RfCatmullRom)
+        Ok(out) => test.assert(out.width == 10 and out.height == 10)
+        Err(_)  => test.fail("a small image could not be fitted")
+
+@test
+fn test_a_crop_takes_the_rectangle_it_was_given() [io]
+    test.case("from the top-left corner named")
+    match imageops.crop(image.new(8, 8, PixRgb8), 2, 3, 4, 5)
+        Ok(out) => test.assert(out.width == 4 and out.height == 5)
+        Err(_)  => test.fail("a rectangle inside the image was refused")
+
+@test
+fn test_a_crop_that_leaves_the_image_is_refused_rather_than_clipped() [io]
+    test.case("a caller who computed it has a bug, and clipping hides it")
+    match imageops.crop(image.new(4, 4, PixRgb8), 2, 2, 4, 4)
+        Ok(_)                        => test.fail("a rectangle off the edge was clipped")
+        Err(ImgBadArgument(what, _)) => test.assert(what == "crop")
+        Err(_)                       => test.fail("refused for the wrong reason")
+
+    test.case("and so is a negative corner")
+    match imageops.crop(image.new(4, 4, PixRgb8), -1, 0, 2, 2)
+        Ok(_)  => test.fail("a negative corner was accepted")
+        Err(_) => test.assert(true)
+
+@test
+fn test_a_quarter_turn_swaps_the_dimensions_and_cannot_fail() [io]
+    test.case("no Result, because there is no argument to get wrong")
+    test.assert(imageops.rotate(image.new(4, 2, PixRgb8), Rot90).width == 2)
+    test.assert(imageops.rotate(image.new(4, 2, PixRgb8), Rot90).height == 4)
+    test.assert(imageops.rotate(image.new(4, 2, PixRgb8), Rot270).width == 2)
+
+    test.case("and a half turn does not")
+    test.assert(imageops.rotate(image.new(4, 2, PixRgb8), Rot180).width == 4)
+    test.assert(imageops.rotate(image.new(4, 2, PixRgb8), Rot180).height == 2)
+
+@test
+fn test_a_flip_keeps_the_dimensions_and_cannot_fail() [io]
+    test.case("both axes")
+    test.assert(imageops.flip(image.new(4, 2, PixRgb8), FlipHorizontal).width == 4)
+    test.assert(imageops.flip(image.new(4, 2, PixRgb8), FlipVertical).height == 2)
+
+@test
+fn test_converting_changes_the_buffer_size_and_not_the_dimensions() [io]
+    test.case("RGBA to grey is a quarter of the bytes")
+    let g = imageops.convert(image.new(2, 2, PixRgba8), PixLuma8)
+    test.assert(g.width == 2 and g.height == 2)
+    test.assert(image.byte_size(g) == 4)
+
+    test.case("eight bits to sixteen doubles them")
+    let w = imageops.convert(image.new(2, 2, PixRgb8), PixRgb16)
+    test.assert(image.byte_size(w) == 24)
+
+@test
+fn test_converting_to_the_kind_an_image_already_has_changes_nothing() [io]
+    test.case("and copies nothing")
+    let img = image.new(3, 3, PixRgba8)
+    test.assert(image.byte_size(imageops.convert(img, PixRgba8)) == image.byte_size(img))
+
+@test
+fn test_adding_an_alpha_channel_fills_it_opaque() [io]
+    test.case("255, not 0 — a converted image is not suddenly invisible")
+    let a = imageops.convert(image.filled(2, 2, PixRgb8, srgb.opaque(srgb.white())), PixRgba8)
+    match image.pixel(a, 0, 0)
+        Some(p) => test.assert(p.a == 255)
+        None    => test.fail("0,0 is inside a 2x2 image")
+
+@test
+fn test_dropping_an_alpha_channel_does_not_composite_onto_anything() [io]
+    test.case("there is no background to composite against")
+    let src = image.filled(2, 2, PixRgba8, srgb.with_alpha(srgb.white(), 0))
+    let out = imageops.convert(src, PixRgb8)
+    match image.pixel(out, 0, 0)
+        Some(p) => test.assert(p.rgb.r == 255)
+        None    => test.fail("0,0 is inside a 2x2 image")
+
+@test
+fn test_an_overlay_clips_rather_than_failing() [io]
+    test.case("a compositor draws at edges constantly")
+    let dst = image.new(8, 8, PixRgba8)
+    test.assert(imageops.overlay(dst, image.new(4, 4, PixRgba8), 6, 6).width == 8)
+
+    test.case("and one entirely outside leaves the destination alone")
+    test.assert(imageops.overlay(dst, image.new(2, 2, PixRgba8), 99, 99).height == 8)
+
+    test.case("the destination's kind is kept, not the source's")
+    let rgb = image.new(8, 8, PixRgb8)
+    test.assert(image.bytes_per_pixel(imageops.overlay(rgb, image.new(2, 2, PixRgba8), 0, 0).kind) == 3)

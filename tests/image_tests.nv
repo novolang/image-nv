@@ -1,0 +1,162 @@
+// image_tests.nv — the API suite for the decoded image and its pixel
+// kinds.
+//
+// RED ON PURPOSE.  Every body in this package is a `todo()`, so every
+// assertion below reaches `not implemented: image-nv.<module>.<fn>`
+// and the suite fails.  That is the expected state of an interface
+// package and it is what makes these tests worth writing NOW: they
+// compile against the signatures, which is the claim being reviewed,
+// and the day a body lands the suite says whether the body agrees with
+// what was promised.
+
+use std.test
+use image
+use srgb
+
+@test
+fn test_the_eight_kinds_have_the_channel_counts_their_names_say() [io]
+    test.case("grey is one channel, RGB three, and alpha adds one")
+    test.assert(image.channel_count(PixLuma8) == 1)
+    test.assert(image.channel_count(PixLumaAlpha8) == 2)
+    test.assert(image.channel_count(PixRgb8) == 3)
+    test.assert(image.channel_count(PixRgba8) == 4)
+
+    test.case("and the sixteen-bit kinds have the same channels")
+    test.assert(image.channel_count(PixLuma16) == 1)
+    test.assert(image.channel_count(PixRgba16) == 4)
+
+@test
+fn test_a_sample_is_one_byte_or_two() [io]
+    test.case("eight bits and sixteen")
+    test.assert(image.bytes_per_sample(PixRgb8) == 1)
+    test.assert(image.bytes_per_sample(PixRgb16) == 2)
+
+@test
+fn test_a_pixel_is_its_channels_times_its_sample_width() [io]
+    test.case("one to eight bytes")
+    test.assert(image.bytes_per_pixel(PixLuma8) == 1)
+    test.assert(image.bytes_per_pixel(PixRgb8) == 3)
+    test.assert(image.bytes_per_pixel(PixRgba8) == 4)
+    test.assert(image.bytes_per_pixel(PixLumaAlpha16) == 4)
+    test.assert(image.bytes_per_pixel(PixRgba16) == 8)
+
+@test
+fn test_the_two_predicates_split_the_eight_kinds_in_half() [io]
+    test.case("four carry alpha")
+    test.assert(image.has_alpha(PixRgba8))
+    test.assert(image.has_alpha(PixLumaAlpha16))
+    test.assert(image.has_alpha(PixRgb8) == false)
+    test.assert(image.has_alpha(PixLuma16) == false)
+
+    test.case("and four are greyscale")
+    test.assert(image.is_grey(PixLuma8))
+    test.assert(image.is_grey(PixLumaAlpha16))
+    test.assert(image.is_grey(PixRgb8) == false)
+    test.assert(image.is_grey(PixRgba16) == false)
+
+@test
+fn test_adding_an_alpha_channel_keeps_the_sample_width() [io]
+    test.case("RGB widens to RGBA at the same depth")
+    test.assert(image.bytes_per_pixel(image.with_alpha_channel(PixRgb8)) == 4)
+    test.assert(image.bytes_per_pixel(image.with_alpha_channel(PixRgb16)) == 8)
+
+    test.case("and a kind that already has one is unchanged")
+    test.assert(image.bytes_per_pixel(image.with_alpha_channel(PixRgba8)) == 4)
+
+@test
+fn test_the_stride_has_no_padding_in_it() [io]
+    test.case("width times bytes per pixel, exactly")
+    test.assert(image.stride(image.new(3, 1, PixRgb8)) == 9)
+    test.assert(image.stride(image.new(3, 1, PixRgba16)) == 24)
+
+    test.case("which a four-byte-aligned stride would not be")
+    test.assert(image.stride(image.new(3, 1, PixLuma8)) == 3)
+
+@test
+fn test_the_buffer_is_the_stride_times_the_height() [io]
+    test.case("no gap between rows and none after the last")
+    test.assert(image.byte_size(image.new(2, 3, PixLuma8)) == 6)
+    test.assert(image.byte_size(image.new(2, 2, PixRgba8)) == 16)
+
+@test
+fn test_a_new_image_is_all_zero_which_means_two_things() [io]
+    test.case("the dimensions and the kind are what was asked for")
+    let img = image.new(4, 5, PixRgba8)
+    test.assert(img.width == 4 and img.height == 5)
+    test.assert(image.bytes_per_pixel(img.kind) == 4)
+
+    test.case("and zero is transparent where there is alpha")
+    match image.pixel(img, 0, 0)
+        Some(p) => test.assert(p.a == 0)
+        None    => test.fail("0,0 is inside a 4x5 image")
+
+    test.case("and opaque black where there is not")
+    match image.pixel(image.new(4, 5, PixRgb8), 0, 0)
+        Some(p) => test.assert(p.a == 255 and p.rgb.r == 0)
+        None    => test.fail("0,0 is inside a 4x5 image")
+
+@test
+fn test_a_filled_image_carries_the_colour_everywhere() [io]
+    test.case("every pixel is the one that was given")
+    let img = image.filled(3, 3, PixRgba8, srgb.opaque(srgb.white()))
+    match image.pixel(img, 2, 2)
+        Some(p) => test.assert(p.rgb.r == 255 and p.a == 255)
+        None    => test.fail("2,2 is inside a 3x3 image")
+
+@test
+fn test_a_buffer_of_the_wrong_size_is_refused() [io]
+    test.case("three bytes are not four one-byte pixels")
+    match image.from_samples(2, 2, PixLuma8, bytes.zeros(3))
+        Some(_) => test.fail("a three-byte buffer accepted for four pixels")
+        None    => test.assert(true)
+
+    test.case("and four are")
+    match image.from_samples(2, 2, PixLuma8, bytes.zeros(4))
+        Some(img) => test.assert(image.byte_size(img) == 4)
+        None      => test.fail("a four-byte buffer refused for four pixels")
+
+@test
+fn test_a_coordinate_outside_the_image_has_no_pixel() [io]
+    test.case("past the right edge")
+    match image.pixel(image.new(2, 2, PixRgba8), 2, 0)
+        Some(_) => test.fail("x = 2 was read from a 2-wide image")
+        None    => test.assert(true)
+
+    test.case("and a negative one")
+    match image.pixel(image.new(2, 2, PixRgba8), -1, 0)
+        Some(_) => test.fail("x = -1 was read")
+        None    => test.assert(true)
+
+@test
+fn test_setting_a_pixel_outside_the_image_clips_rather_than_panics() [io]
+    test.case("a compositor draws at edges constantly")
+    let img = image.with_pixel(image.new(2, 2, PixRgba8), 9, 9, srgb.opaque(srgb.white()))
+    test.assert(image.byte_size(img) == 16)
+
+    test.case("and inside, it is stored")
+    let set = image.with_pixel(image.new(2, 2, PixRgba8), 1, 1, srgb.opaque(srgb.white()))
+    match image.pixel(set, 1, 1)
+        Some(p) => test.assert(p.rgb.r == 255)
+        None    => test.fail("1,1 is inside a 2x2 image")
+
+@test
+fn test_a_row_is_a_stride_of_unconverted_samples() [io]
+    test.case("the fast path — no conversion, the image's own layout")
+    match image.row(image.new(2, 2, PixRgb8), 0)
+        Some(r) => test.assert(bytes.len(r) == 6)
+        None    => test.fail("row 0 is inside a 2-tall image")
+
+    test.case("and a row outside the image is not one")
+    match image.row(image.new(2, 2, PixRgb8), 2)
+        Some(_) => test.fail("row 2 was read from a 2-tall image")
+        None    => test.assert(true)
+
+@test
+fn test_a_row_of_the_wrong_length_leaves_the_image_alone() [io]
+    test.case("for the same reason from_samples refuses a wrong buffer")
+    let img = image.with_row(image.new(2, 2, PixRgb8), 0, bytes.zeros(5))
+    test.assert(image.byte_size(img) == 12)
+
+    test.case("and a row of the right length is taken")
+    let ok = image.with_row(image.new(2, 2, PixRgb8), 0, bytes.zeros(6))
+    test.assert(ok.height == 2)

@@ -1,0 +1,187 @@
+// imagefmt.nv — which formats this package speaks, and how to tell
+// them apart from the bytes.
+//
+// SNIFFING IS BY MAGIC AND NEVER BY EXTENSION
+//
+// A file name is a claim its owner made and a magic number is a claim
+// the encoder made, and only one of those is checkable.  `sniff` reads
+// bytes; `of_extension` exists for the caller who has a name and NO
+// bytes — a `Content-Type` to write, an output path to honour — and
+// its documentation says so rather than leaving a reader to pick.
+//
+// A decoder that trusted an extension is the classic upload
+// vulnerability: a `.png` whose bytes are something else, handed to
+// whatever the bytes actually are.  `imagecodec.decode` sniffs, always,
+// and `imagecodec.decode_as` is the escape for a caller who has
+// out-of-band knowledge and takes responsibility for it.
+//
+// THREE FORMATS, AND WHY THESE THREE
+//
+// PNG because it is the lossless format everything reads.  JPEG
+// because it is the lossy format everything reads, and because the
+// plan's row for this package names it.  QOI because it costs almost
+// nothing to support — the whole specification is one page — and
+// because it is the format a program can be asked to write when the
+// point is speed rather than size.
+//
+// GIF, WebP, TIFF, BMP and AVIF are absent.  Each of them is a real
+// package's worth of work and none of them is on this grid yet; the
+// enum is where they would arrive, and the shape of `decode` does not
+// change when they do.
+
+// A format this package can read or write.
+//
+// A separate type from `ImageEncoding` in `imagecodec.nv`, which pairs
+// a format with the options for writing it.  This one is the ANSWER to
+// "what is this?", and it carries no options because a decoder does
+// not need any.
+//
+// ```novo
+// use imagefmt
+//
+// fn main() [io]
+//     println("${imagefmt.format_name(FmtPng)}")           // png
+// ```
+pub enum ImageFormat
+    // PNG, lossless, read and written by png-nv.
+    FmtPng
+    // JPEG, lossy, read and written by this package's own
+    // `jpegcodec`.
+    FmtJpeg
+    // QOI, lossless, read and written by qoi-nv.
+    FmtQoi
+
+// The lower-case name of a format, for a message.
+//
+// `png`, `jpeg`, `qoi`.
+//
+// ```novo
+// use imagefmt
+//
+// fn main() [io]
+//     println("${imagefmt.format_name(FmtQoi)}")           // qoi
+// ```
+pub fn format_name(f: ImageFormat) -> Str
+    todo("image-nv.imagefmt.format_name")
+
+// The MIME type of a format.
+//
+// `image/png`, `image/jpeg`, `image/qoi`.  The last of those is not
+// registered with IANA — QOI has no official media type — and this
+// package uses the spelling the format's own tooling uses rather than
+// inventing an `x-` prefix nobody would recognise.
+//
+// ```novo
+// use imagefmt
+//
+// fn main() [io]
+//     println("${imagefmt.mime_type(FmtJpeg)}")            // image/jpeg
+// ```
+pub fn mime_type(f: ImageFormat) -> Str
+    todo("image-nv.imagefmt.mime_type")
+
+// The file extensions a format is written with, without the dot.
+//
+// `["png"]`, `["jpg", "jpeg"]`, `["qoi"]` — the first entry is the one
+// to write and the rest are ones to recognise, which is the whole
+// reason this is a list and not a `Str`.
+//
+// ```novo
+// use imagefmt
+//
+// fn main() [io]
+//     println("${imagefmt.extensions(FmtJpeg).len()}")     // 2
+// ```
+pub fn extensions(f: ImageFormat) -> [Str]
+    todo("image-nv.imagefmt.extensions")
+
+// The format a buffer's first bytes say it is.
+//
+// `None` for a buffer that is none of the three, and for one too short
+// to tell — which are the same answer, because "I could not identify
+// this" is what a caller acts on either way.
+//
+// The longest magic this needs is PNG's eight bytes, so a caller who
+// is sniffing a stream needs only that many before they can ask.
+// `magic_length` is that number.
+//
+// ```novo
+// use imagefmt
+//
+// fn main() [io]
+//     match imagefmt.sniff(bytes.zeros(16))
+//         Some(_) => println("recognised")
+//         None    => println("not an image this package reads")     // this one
+// ```
+pub fn sniff(src: Bytes) -> ?ImageFormat
+    todo("image-nv.imagefmt.sniff")
+
+// How many bytes `sniff` needs before it can answer: 8.
+//
+// PNG's signature is the longest of the three magics, so eight bytes
+// is enough to identify any of them or to say none of them.  A caller
+// sniffing a stream reads this many and stops.
+//
+// ```novo
+// use imagefmt
+//
+// fn main() [io]
+//     println("${imagefmt.magic_length()}")                // 8
+// ```
+pub fn magic_length() -> Int
+    todo("image-nv.imagefmt.magic_length")
+
+// The format a file extension names.
+//
+// Lower-cased and without the dot; `jpg` and `jpeg` both answer
+// `FmtJpeg`.  `None` for anything else.
+//
+// **This is not how to decide what to decode.**  A name is a claim its
+// owner made and the bytes are a claim the encoder made; `sniff` reads
+// the second.  This function is for the caller who has a name and no
+// bytes — choosing an output format from a path, filling in a
+// `Content-Type` — which is a different question with a different
+// right answer.
+//
+// ```novo
+// use imagefmt
+//
+// fn main() [io]
+//     match imagefmt.of_extension("jpg")
+//         Some(f) => println("${imagefmt.format_name(f)}") // jpeg
+//         None    => println("unknown extension")
+// ```
+pub fn of_extension(ext: Str) -> ?ImageFormat
+    todo("image-nv.imagefmt.of_extension")
+
+// Whether a format can represent an alpha channel.
+//
+// True for PNG and QOI, false for JPEG.  The predicate that decides
+// whether `imagecodec.encode` is about to throw information away, and
+// the reason it is a function here rather than a comment in a caller's
+// head: writing an RGBA image as JPEG silently loses the alpha, and a
+// program that cared should have asked.
+//
+// ```novo
+// use imagefmt
+//
+// fn main() [io]
+//     println("${imagefmt.supports_alpha(FmtJpeg)}")       // false
+// ```
+pub fn supports_alpha(f: ImageFormat) -> Bool
+    todo("image-nv.imagefmt.supports_alpha")
+
+// Whether a format is lossless.
+//
+// True for PNG and QOI, false for JPEG.  Together with
+// `supports_alpha` this is the whole of what a caller choosing an
+// output format needs from this module.
+//
+// ```novo
+// use imagefmt
+//
+// fn main() [io]
+//     println("${imagefmt.is_lossless(FmtQoi)}")           // true
+// ```
+pub fn is_lossless(f: ImageFormat) -> Bool
+    todo("image-nv.imagefmt.is_lossless")

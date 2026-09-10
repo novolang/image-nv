@@ -1,0 +1,291 @@
+// imagecodec_tests.nv — the API suite for the format enumeration, the
+// front, and the JPEG surface.
+//
+// RED ON PURPOSE: every body is a `todo()`.  See image_tests.nv for
+// why an interface package ships a failing suite.
+//
+// The assertions worth reading here are the ones about REFUSAL: that
+// sniffing reads bytes and never a name, that encoding will not drop a
+// caller's alpha to fit a format, and that a quality outside 1..=100 is
+// an error rather than a clamp.  Those are the decisions this front
+// makes, and a body that softened one of them would be a different
+// package.
+
+use std.test
+use image
+use imagecodec
+use imageerror
+use imagefmt
+use jpegcodec
+use pngenc
+
+@test
+fn test_the_format_names_are_the_lower_case_ones() [io]
+    test.case("png, jpeg, qoi")
+    test.assert(imagefmt.format_name(FmtPng) == "png")
+    test.assert(imagefmt.format_name(FmtJpeg) == "jpeg")
+    test.assert(imagefmt.format_name(FmtQoi) == "qoi")
+
+@test
+fn test_the_mime_types_are_the_registered_ones_where_there_are_any() [io]
+    test.case("PNG and JPEG are registered")
+    test.assert(imagefmt.mime_type(FmtPng) == "image/png")
+    test.assert(imagefmt.mime_type(FmtJpeg) == "image/jpeg")
+
+    test.case("and QOI's is the one its own tooling uses")
+    test.assert(imagefmt.mime_type(FmtQoi) == "image/qoi")
+
+@test
+fn test_the_first_extension_is_the_one_to_write() [io]
+    test.case("jpg first, jpeg recognised")
+    test.assert(imagefmt.extensions(FmtJpeg).len() == 2)
+    test.assert(imagefmt.extensions(FmtPng).len() == 1)
+
+@test
+fn test_an_extension_is_read_back_case_insensitively_by_the_caller() [io]
+    test.case("both spellings of the JPEG extension")
+    match imagefmt.of_extension("jpg")
+        Some(f) => test.assert(imagefmt.format_name(f) == "jpeg")
+        None    => test.fail("jpg names no format")
+    match imagefmt.of_extension("jpeg")
+        Some(f) => test.assert(imagefmt.format_name(f) == "jpeg")
+        None    => test.fail("jpeg names no format")
+
+    test.case("and an extension this package does not read")
+    match imagefmt.of_extension("gif")
+        Some(_) => test.fail("gif was recognised")
+        None    => test.assert(true)
+
+@test
+fn test_sniffing_needs_eight_bytes_because_pngs_magic_is_eight() [io]
+    test.case("the longest of the three magics")
+    test.assert(imagefmt.magic_length() == 8)
+
+    test.case("and eight zero bytes are none of them")
+    match imagefmt.sniff(bytes.zeros(8))
+        Some(_) => test.fail("eight zero bytes were recognised as an image")
+        None    => test.assert(true)
+
+@test
+fn test_the_two_facts_a_caller_choosing_a_format_needs() [io]
+    test.case("only JPEG is lossy")
+    test.assert(imagefmt.is_lossless(FmtPng))
+    test.assert(imagefmt.is_lossless(FmtQoi))
+    test.assert(imagefmt.is_lossless(FmtJpeg) == false)
+
+    test.case("and only JPEG has no alpha")
+    test.assert(imagefmt.supports_alpha(FmtPng))
+    test.assert(imagefmt.supports_alpha(FmtQoi))
+    test.assert(imagefmt.supports_alpha(FmtJpeg) == false)
+
+@test
+fn test_an_encoding_names_the_format_it_writes() [io]
+    test.case("each variant carries its own options and no others")
+    test.assert(imagecodec.encoding_name(EncQoi) == "qoi")
+    test.assert(imagecodec.encoding_name(EncPng(pngenc.default_options())) == "png")
+    test.assert(imagecodec.encoding_name(EncJpeg(jpegcodec.default_options())) == "jpeg")
+
+    test.case("and the format it resolves to agrees")
+    test.assert(imagefmt.format_name(imagecodec.encoding_format(EncQoi)) == "qoi")
+
+@test
+fn test_a_formats_defaults_are_an_encoding() [io]
+    test.case("for the caller who has a format and no opinion")
+    test.assert(imagecodec.encoding_name(imagecodec.default_encoding(FmtPng)) == "png")
+    test.assert(imagecodec.encoding_name(imagecodec.default_encoding(FmtJpeg)) == "jpeg")
+    test.assert(imagecodec.encoding_name(imagecodec.default_encoding(FmtQoi)) == "qoi")
+
+@test
+fn test_decoding_something_that_is_no_format_is_refused_by_the_front() [io]
+    test.case("before any codec is reached")
+    match imagecodec.decode(bytes.zeros(64))
+        Ok(_)                      => test.fail("64 zero bytes decoded as an image")
+        Err(ImgUnknownFormat(off)) => test.assert(off == 0)
+        Err(_)                     => test.fail("refused for the wrong reason")
+
+@test
+fn test_too_few_bytes_to_sniff_is_a_different_answer_from_no_format() [io]
+    test.case("this one a caller retries with more bytes")
+    match imagecodec.decode(bytes.zeros(2))
+        Ok(_)                           => test.fail("two bytes decoded as an image")
+        Err(ImgTooShortToSniff(_, len)) => test.assert(len == 2)
+        Err(_)                          => test.fail("refused for the wrong reason")
+
+@test
+fn test_an_error_says_whether_the_file_or_the_call_is_at_fault() [io]
+    test.case("a file this package cannot identify is the file's fault")
+    test.assert(imageerror.is_format_failure(ImgUnknownFormat(0)))
+
+    test.case("and a crop off the edge is the caller's")
+    test.assert(imageerror.is_format_failure(ImgBadArgument("crop", "off the edge")) == false)
+    test.assert(imageerror.is_format_failure(ImgBadBufferSize(16, 12)) == false)
+
+@test
+fn test_an_error_says_whether_more_bytes_could_help() [io]
+    test.case("a short sniff might be settled by more")
+    test.assert(imageerror.needs_more_bytes(ImgTooShortToSniff(0, 2)))
+
+    test.case("and a format that cannot carry an alpha never will")
+    test.assert(imageerror.needs_more_bytes(ImgFormatCannotCarry("jpeg", "alpha")) == false)
+
+@test
+fn test_the_argument_errors_are_not_about_a_place_in_a_file() [io]
+    test.case("so they answer -1")
+    test.assert(imageerror.offset_of(ImgBadArgument("resize", "zero width")) == -1)
+    test.assert(imageerror.offset_of(ImgSourceFailed(IoNotFound)) == -1)
+
+    test.case("and an unidentified file is at its start")
+    test.assert(imageerror.offset_of(ImgUnknownFormat(0)) == 0)
+
+@test
+fn test_encoding_refuses_rather_than_dropping_what_a_format_cannot_hold() [io]
+    test.case("an alpha channel as JPEG")
+    let rgba = image.new(2, 2, PixRgba8)
+    test.assert(imagecodec.can_carry(rgba, EncJpeg(jpegcodec.default_options())) == false)
+    match imagecodec.encode(rgba, EncJpeg(jpegcodec.default_options()))
+        Ok(_)                           => test.fail("an RGBA image was written as JPEG")
+        Err(ImgFormatCannotCarry(f, _)) => test.assert(f == "jpeg")
+        Err(_)                          => test.fail("refused for the wrong reason")
+
+    test.case("and sixteen-bit samples as QOI")
+    test.assert(imagecodec.can_carry(image.new(2, 2, PixRgba16), EncQoi) == false)
+
+@test
+fn test_png_carries_every_kind_this_package_has() [io]
+    test.case("which is why it is the format that never refuses")
+    test.assert(imagecodec.can_carry(image.new(2, 2, PixRgba16), EncPng(pngenc.default_options())))
+    test.assert(imagecodec.can_carry(image.new(2, 2, PixLuma8), EncPng(pngenc.default_options())))
+
+@test
+fn test_kind_for_says_what_would_make_a_refusal_into_an_acceptance() [io]
+    test.case("JPEG wants three eight-bit channels")
+    let rgba16 = image.new(2, 2, PixRgba16)
+    test.assert(image.bytes_per_pixel(imagecodec.kind_for(rgba16, EncJpeg(jpegcodec.default_options()))) == 3)
+
+    test.case("QOI wants four eight-bit ones for an image with alpha")
+    test.assert(image.bytes_per_pixel(imagecodec.kind_for(rgba16, EncQoi)) == 4)
+
+    test.case("and PNG wants the image's own kind, because it carries them all")
+    test.assert(image.bytes_per_pixel(imagecodec.kind_for(rgba16, EncPng(pngenc.default_options()))) == 8)
+
+@test
+fn test_reading_a_size_touches_no_pixels() [io]
+    test.case("the question a thumbnailer asks first")
+    match imagecodec.read_size(bytes.zeros(0))
+        Ok(_)  => test.fail("an empty buffer had a size")
+        Err(_) => test.assert(true)
+
+@test
+fn test_a_bounded_decode_refuses_a_bomb() [io]
+    test.case("the bound is in bytes of decoded image")
+    match imagecodec.decode_bounded(bytes.zeros(0), 1024)
+        Ok(_)  => test.fail("an empty buffer decoded")
+        Err(_) => test.assert(true)
+
+@test
+fn test_decoding_as_a_named_format_skips_the_sniff() [io]
+    test.case("the escape for a caller with out-of-band knowledge")
+    match imagecodec.decode_as(bytes.zeros(0), FmtPng)
+        Ok(_)  => test.fail("an empty buffer decoded as a PNG")
+        Err(_) => test.assert(true)
+
+    test.case("and decode_as_kind is decode plus a conversion")
+    match imagecodec.decode_as_kind(bytes.zeros(0), PixRgba8)
+        Ok(_)  => test.fail("an empty buffer decoded")
+        Err(_) => test.assert(true)
+
+@test
+fn test_read_all_is_charged_what_its_source_costs() [io]
+    // `imagecodec.read_all` binds `Read`'s effect parameter, so it
+    // cannot be called from a pure test without a source to hand it.
+    // What this asserts is the part a suite CAN assert: that a stream
+    // failure comes back carrying the host's own `IoError`.  The
+    // effect row itself is checked by the audit's `effect-budget` row,
+    // which is a stronger check than a test.
+    test.case("a source failure carries the host's error and no offset")
+    test.assert(imageerror.offset_of(ImgSourceFailed(IoNotFound)) == -1)
+    test.assert(imageerror.needs_more_bytes(ImgSourceFailed(IoNotFound)))
+
+@test
+fn test_the_jpeg_modes_and_their_names() [io]
+    test.case("the one that can be streamed and the one that cannot")
+    test.assert(jpegcodec.mode_name(JpegBaseline) == "baseline")
+    test.assert(jpegcodec.mode_name(JpegProgressive) == "progressive")
+
+@test
+fn test_the_subsampling_names_are_the_ratios_everyone_writes() [io]
+    test.case("in the 4:x:y spelling")
+    test.assert(jpegcodec.chroma_name(Chroma444) == "4:4:4")
+    test.assert(jpegcodec.chroma_name(Chroma422) == "4:2:2")
+    test.assert(jpegcodec.chroma_name(Chroma420) == "4:2:0")
+    test.assert(jpegcodec.chroma_name(Chroma400) == "4:0:0")
+
+@test
+fn test_the_subsampling_ratios_are_what_decide_an_mcus_size() [io]
+    test.case("4:4:4 shares nothing")
+    let (h4, v4) = jpegcodec.chroma_ratio(Chroma444)
+    test.assert(h4 == 1 and v4 == 1)
+
+    test.case("4:2:2 halves horizontally only")
+    let (h2, v2) = jpegcodec.chroma_ratio(Chroma422)
+    test.assert(h2 == 2 and v2 == 1)
+
+    test.case("4:2:0 halves both")
+    let (h0, v0) = jpegcodec.chroma_ratio(Chroma420)
+    test.assert(h0 == 2 and v0 == 2)
+
+    test.case("and 4:0:0 has no colour samples at all")
+    let (hg, vg) = jpegcodec.chroma_ratio(Chroma400)
+    test.assert(hg == 0 and vg == 0)
+
+@test
+fn test_the_jpeg_defaults_are_what_every_tool_defaults_to() [io]
+    test.case("quality 85, baseline, 4:2:0, no Huffman optimisation")
+    let o = jpegcodec.default_options()
+    test.assert(o.quality == 85)
+    test.assert(jpegcodec.mode_name(o.mode) == "baseline")
+    test.assert(jpegcodec.chroma_name(o.chroma) == "4:2:0")
+    test.assert(o.optimize_huffman == false)
+
+@test
+fn test_a_quality_outside_the_range_is_refused_and_not_clamped() [io]
+    test.case("the mistake a number from a command line makes")
+    match jpegcodec.at_quality(0)
+        Ok(_)  => test.fail("quality 0 accepted")
+        Err(_) => test.assert(true)
+    match jpegcodec.at_quality(101)
+        Ok(_)  => test.fail("quality 101 accepted")
+        Err(_) => test.assert(true)
+
+    test.case("and both ends of the range are in")
+    match jpegcodec.at_quality(1)
+        Ok(o)  => test.assert(o.quality == 1)
+        Err(_) => test.fail("quality 1 refused")
+    match jpegcodec.at_quality(100)
+        Ok(o)  => test.assert(o.quality == 100)
+        Err(_) => test.fail("quality 100 refused")
+
+@test
+fn test_a_jpegs_magic_is_two_bytes_which_is_a_weak_claim() [io]
+    test.case("FF D8, and zero bytes are not it")
+    test.assert(jpegcodec.is_jpeg(bytes.zeros(2)) == false)
+    test.assert(jpegcodec.is_jpeg(bytes.zeros(0)) == false)
+
+@test
+fn test_the_jpeg_surface_is_whole_buffer_in_both_directions() [io]
+    test.case("because a progressive scan cannot be output until the last one")
+    match jpegcodec.decode(bytes.zeros(0))
+        Ok(_)  => test.fail("an empty buffer decoded as a JPEG")
+        Err(_) => test.assert(true)
+
+    test.case("and reading its info stops at the first frame marker")
+    match jpegcodec.read_info(bytes.zeros(4))
+        Ok(_)  => test.fail("four zero bytes read as a JPEG header")
+        Err(_) => test.assert(true)
+
+@test
+fn test_encoding_a_jpeg_refuses_a_kind_it_cannot_carry() [io]
+    test.case("no alpha and no sixteen-bit mode")
+    match jpegcodec.encode(image.new(2, 2, PixRgba8), jpegcodec.default_options())
+        Ok(_)  => test.fail("an RGBA image was written as JPEG")
+        Err(_) => test.assert(true)

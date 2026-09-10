@@ -1,0 +1,316 @@
+// imagecodec.nv — the front: `decode` dispatches on the bytes,
+// `encode` on a format the caller named, and neither of them guesses.
+//
+// WHAT A MULTI-FORMAT FRONT IS FOR
+//
+// A program that opens an image does not usually care which format it
+// is; a program that writes one always does.  That asymmetry is the
+// whole shape of this module: `decode` takes bytes and answers an
+// `Image`, and `encode` takes an `Image` and a format WITH its options,
+// because there is no default JPEG quality that is right for both a
+// thumbnail and an archive.
+//
+// THIS PACKAGE DEPENDS ON png-nv AND qoi-nv; IT DOES NOT CONTAIN THEM
+//
+// The must-have plan gives png-nv "the format on its own" and image-nv
+// "the multi-format front", and the honest reading of those two rows is
+// a dependency rather than a duplicate.  Two reasons, and the second is
+// the one that decides it:
+//
+//   * Two PNG codecs in one registry is one codec and a copy that is
+//     always slightly behind it.  Whichever were fixed first, the other
+//     would carry the bug.
+//   * **They are not the same package.**  A program that only reads PNG
+//     — a favicon service, a plot renderer, a screenshot differ —
+//     should not acquire a JPEG decoder, an Adam7 composer and a
+//     Lanczos resampler to do it.  png-nv at `core` with two
+//     dependencies is a genuinely smaller thing to take than image-nv
+//     with five, and the grid exists so that a caller can take the
+//     smaller one.
+//
+// The precedent for the other answer — heapless-nv absorbing the
+// ringbuf-nv row — applies where two rows are ONE thing.  These are
+// two things, and the test is that a sensible program wants exactly
+// one of them.
+//
+// WHY `encode` REFUSES RATHER THAN CONVERTS
+//
+// Writing an RGBA image as JPEG has to lose the alpha and writing a
+// 16-bit image as QOI has to lose eight bits a channel.  This package
+// refuses both, with `ImgFormatCannotCarry` naming what would have been
+// lost.  A caller who meant to calls `imageops.convert` first — and the
+// conversion is then a line in their code that a reader can see,
+// instead of a silence inside a call that looked like it was only
+// choosing a container.
+
+use image
+use imagefmt
+use imageops
+
+// A format to write, with the options for writing it.
+//
+// A separate type from `ImageFormat` because the two answer different
+// questions: `ImageFormat` is what `sniff` returns and carries no
+// options, and this is what `encode` takes and carries all of them.
+// Pairing each format with its own options in the variant is what
+// makes an impossible combination unrepresentable — there is no way to
+// hand a JPEG quality to a PNG encoder, because the constructor does
+// not admit one.
+//
+// ```novo
+// use imagecodec
+// use pngenc
+//
+// fn main() [io]
+//     let e = EncPng(pngenc.default_options())
+//     println("${imagecodec.encoding_name(e)}")            // png
+// ```
+pub enum ImageEncoding
+    // PNG, with png-nv's own options: the DEFLATE level and the filter
+    // strategy.
+    EncPng(options: PngOptions)
+    // JPEG, with the quality, the mode and the chroma subsampling.
+    EncJpeg(options: JpegOptions)
+    // QOI, which has no options at all — the format has no level, no
+    // strategy and no window, which is most of why it exists.
+    EncQoi
+
+// The format an encoding writes.
+//
+// ```novo
+// use imagecodec
+//
+// fn main() [io]
+//     println("${imagefmt.format_name(imagecodec.encoding_format(EncQoi))}")   // qoi
+// ```
+pub fn encoding_format(e: ImageEncoding) -> ImageFormat
+    todo("image-nv.imagecodec.encoding_format")
+
+// The name of the format an encoding writes.
+//
+// ```novo
+// use imagecodec
+//
+// fn main() [io]
+//     println("${imagecodec.encoding_name(EncQoi)}")       // qoi
+// ```
+pub fn encoding_name(e: ImageEncoding) -> Str
+    todo("image-nv.imagecodec.encoding_name")
+
+// The encoding a format's defaults describe.
+//
+// PNG at level 6 with the full filter search, JPEG at quality 85 with
+// 4:2:0 chroma subsampling, QOI as itself.  For the caller who has a
+// format and no opinion — a converter honouring an output extension,
+// a test.
+//
+// ```novo
+// use imagecodec
+//
+// fn main() [io]
+//     println("${imagecodec.encoding_name(imagecodec.default_encoding(FmtPng))}")   // png
+// ```
+pub fn default_encoding(f: ImageFormat) -> ImageEncoding
+    todo("image-nv.imagecodec.default_encoding")
+
+// Decode a whole file, dispatching on its magic.
+//
+// The front door.  The format is read from the bytes and never from a
+// name, so a `.png` whose contents are a JPEG decodes as a JPEG — and
+// a caller who wanted the name honoured instead is asking for the
+// upload vulnerability, which is why that is not what this does.
+//
+// The resulting `Image` is in whatever `PixelKind` the file's own
+// contents map to: an indexed PNG becomes `PixRgba8` or `PixRgb8`
+// depending on whether it had a tRNS, a 16-bit PNG stays 16-bit, a
+// baseline JPEG becomes `PixRgb8`, and a three-channel QOI becomes
+// `PixRgb8`.  `imageops.convert` is where a caller who wants one
+// specific kind says so, and `decode_as_kind` is that in one call.
+//
+// ```novo
+// use imagecodec
+//
+// fn main() [io]
+//     match imagecodec.decode(bytes.zeros(0))
+//         Ok(_)  => println("decoded")
+//         Err(_) => println("not an image")                // this one
+// ```
+pub fn decode(src: Bytes) -> Result<Image, ImageError>
+    todo("image-nv.imagecodec.decode")
+
+// Decode a whole file that is known to be a particular format.
+//
+// The escape from sniffing, for the caller who has out-of-band
+// knowledge — a database column with a format field, a protocol that
+// declared it — and takes responsibility for being right.  A file
+// whose bytes are a different format fails inside that format's codec
+// rather than being recognised, which is the cost of the escape and is
+// why `decode` is the default.
+//
+// ```novo
+// use imagecodec
+//
+// fn main() [io]
+//     match imagecodec.decode_as(bytes.zeros(0), FmtPng)
+//         Ok(_)  => println("decoded")
+//         Err(_) => println("not a PNG")                   // this one
+// ```
+pub fn decode_as(src: Bytes, f: ImageFormat) -> Result<Image, ImageError>
+    todo("image-nv.imagecodec.decode_as")
+
+// Decode a whole file and convert it to a chosen pixel kind.
+//
+// The call a caller uploading into a texture or a fixed pipeline
+// wants: one kind out, whatever went in.  It is exactly `decode`
+// followed by `imageops.convert`, written once because the pair is what
+// most callers mean.
+//
+// ```novo
+// use imagecodec
+//
+// fn main() [io]
+//     match imagecodec.decode_as_kind(bytes.zeros(0), PixRgba8)
+//         Ok(_)  => println("decoded")
+//         Err(_) => println("not an image")                // this one
+// ```
+pub fn decode_as_kind(src: Bytes, k: PixelKind) -> Result<Image, ImageError>
+    todo("image-nv.imagecodec.decode_as_kind")
+
+// Read an image's dimensions and format without decoding its pixels.
+//
+// The question a thumbnailer, an upload handler or a layout engine
+// asks first, answered from the header alone — thirty-three bytes for
+// a PNG, fourteen for a QOI, however far the first frame header is for
+// a JPEG.  No pixel buffer is allocated, so a caller can decide
+// whether to commit memory before they do.
+//
+// ```novo
+// use imagecodec
+//
+// fn main() [io]
+//     match imagecodec.read_size(bytes.zeros(0))
+//         Ok(_)  => println("read")
+//         Err(_) => println("not an image")                // this one
+// ```
+pub fn read_size(src: Bytes) -> Result<(ImageFormat, Int, Int, PixelKind), ImageError>
+    todo("image-nv.imagecodec.read_size")
+
+// Refuse an image larger than a bound.
+//
+// A decoded image's size is the product of two numbers a FILE chose,
+// and both PNG and QOI carry them in 32-bit fields — so a forty-byte
+// header can claim an image of four billion by four billion, and the
+// compressed data that fills it with zeroes is a few hundred bytes.
+// That is the decompression bomb every image decoder is eventually
+// handed.
+//
+// The bound is in BYTES of decoded image, because that is the number a
+// caller's memory budget is in.  The default is unbounded, because the
+// right bound is the caller's and not this package's opinion; past it
+// the decode fails with `ImgImageTooLarge`.
+//
+// ```novo
+// use imagecodec
+//
+// fn main() [io]
+//     match imagecodec.decode_bounded(bytes.zeros(0), 268435456)
+//         Ok(_)  => println("decoded")
+//         Err(_) => println("refused")                     // this one
+// ```
+pub fn decode_bounded(src: Bytes, cap: Int) -> Result<Image, ImageError>
+    todo("image-nv.imagecodec.decode_bounded")
+
+// Encode an image in a named format with its options.
+//
+// `Err(ImgFormatCannotCarry)` when the format cannot represent what
+// the image has: an alpha channel as JPEG, sixteen-bit samples as QOI.
+// The refusal is the design — see this module's header — and
+// `imageops.convert` is the one line that answers it.
+//
+// ```novo
+// use imagecodec
+// use image
+//
+// fn main() [io]
+//     let img = image.new(2, 2, PixRgb8)
+//     match imagecodec.encode(img, EncQoi)
+//         Ok(_)  => println("encoded")                     // this one
+//         Err(_) => println("refused")
+// ```
+pub fn encode(img: Image, e: ImageEncoding) -> Result<Bytes, ImageError>
+    todo("image-nv.imagecodec.encode")
+
+// Whether an encoding can carry everything an image has.
+//
+// The question `encode` answers by refusing, asked in advance — for a
+// caller choosing a format from several, or one who wants to warn
+// before converting rather than after failing.
+//
+// ```novo
+// use imagecodec
+// use image
+//
+// fn main() [io]
+//     println("${imagecodec.can_carry(image.new(2, 2, PixRgba8), EncQoi)}")     // true
+// ```
+pub fn can_carry(img: Image, e: ImageEncoding) -> Bool
+    todo("image-nv.imagecodec.can_carry")
+
+// The pixel kind an encoding needs, for an image it cannot carry as
+// it is.
+//
+// What to pass `imageops.convert` before encoding: `PixRgb8` for JPEG,
+// `PixRgba8` or `PixRgb8` for QOI depending on whether the image has
+// alpha, and the image's own kind for PNG, which carries all eight.
+// It is the other half of `can_carry`: one says no, this says what
+// would make it yes.
+//
+// ```novo
+// use imagecodec
+// use image
+//
+// fn main() [io]
+//     let img = image.new(2, 2, PixRgba16)
+//     println("${image.bytes_per_pixel(imagecodec.kind_for(img, EncQoi))}")     // 4
+// ```
+pub fn kind_for(img: Image, e: ImageEncoding) -> PixelKind
+    todo("image-nv.imagecodec.kind_for")
+
+// Decode a whole image from a stream, charged what the stream costs.
+//
+// THE ONE EFFECT-POLYMORPHIC SIGNATURE IN THIS PACKAGE.  `S: Read[e]`
+// binds the effect parameter of the standard library's `Read` trait
+// and the clause is `[e]`, so the row means "whatever the impl behind
+// `S` supplies" — a `File` charges its caller `[io, fs]`, an in-memory
+// buffer charges nothing, and image-nv remains `core` because it has
+// named no effect of its own (SPEC § 5.6).
+//
+// It sniffs the first `imagefmt.magic_length` bytes and hands the rest
+// to the format's own decoder, so a caller streaming a network body
+// never holds the compressed file — except for a JPEG, which this
+// package cannot stream at all.  The README's JPEG section says why,
+// and the short version is progressive mode: a progressive scan's
+// coefficients are refined across the whole file, so nothing can be
+// output until the last scan has been read.
+//
+// A stream failure comes back as `ImgSourceFailed` carrying the host's
+// own `IoError`.
+//
+// ```novo
+// use imagecodec
+// use imageerror
+//
+// fn read_image(path: Str) -> Result<Image, ImageError> [io, fs]
+//     match File.open_read(path)
+//         None    => Err(ImgSourceFailed(IoNotFound))
+//         Some(f) =>
+//             let h: File = f
+//             imagecodec.read_all(h)
+//
+// fn main() [io, fs]
+//     match read_image("in.png")
+//         Ok(_)  => println("decoded")
+//         Err(e) => println(e.message())
+// ```
+pub fn read_all<S: Read[e]>(src: S) -> Result<Image, ImageError> [e]
+    todo("image-nv.imagecodec.read_all")

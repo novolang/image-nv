@@ -1,0 +1,309 @@
+// jpegcodec.nv — JPEG, declared: baseline and progressive, the chroma
+// subsampling story, and quality as the one knob an encoder has.
+//
+// THIS IS THE HARD ONE, AND IT IS DECLARED HERE RATHER THAN IN ITS OWN
+// PACKAGE
+//
+// PNG has png-nv and QOI has qoi-nv; JPEG's interface is in image-nv
+// because the must-have plan's row for image-nv names JPEG as its own
+// responsibility.  That is an asymmetry worth seeing rather than
+// smoothing over: if the implementation lane finds JPEG wants a
+// package, the move is a `jpeg-nv` row and a dependency, and nothing
+// in the shape below has to change — `ImgJpegFailed` becomes a wrapper
+// like `ImgPngFailed`, and that is the whole diff.
+//
+// WHAT MAKES JPEG DIFFERENT FROM EVERYTHING ELSE ON THIS GRID
+//
+// **It is the one format here that cannot be streamed.**  A baseline
+// JPEG could be — its MCU rows arrive in order — but a PROGRESSIVE one
+// cannot: its coefficients are refined across every scan in the file,
+// so nothing can be output until the last scan has been read, and a
+// decoder holds the whole coefficient array (two bytes per coefficient,
+// which for a 4K image is more than the decoded picture) until then.
+// A `feed`-shaped interface that worked for baseline and could not
+// work for progressive would be a promise this package could not keep,
+// so the JPEG surface here is whole-buffer in both directions and says
+// so.  png-nv streams; this does not.
+//
+// **Its output is not exact.**  Two conforming JPEG decoders may
+// disagree by a level or two per channel, because the inverse DCT is
+// specified as a mathematical transform and every implementation
+// approximates it differently — libjpeg-turbo alone ships three.  The
+// conformance requirement (ITU T.83) is a bound on the error, not
+// equality.  So this package's corpus test cannot be "the same bytes
+// as libjpeg-turbo"; it is "within T.83's bound of libjpeg-turbo", and
+// the README says so where a test author will read it.
+//
+// **Its quality number means nothing on its own.**  A "quality 85"
+// JPEG is one whose quantisation tables were scaled by libjpeg's
+// formula from libjpeg's own baseline tables — and Photoshop's 85,
+// MozJPEG's 85 and a phone's 85 are all different files.  This package
+// follows libjpeg's scaling, because that is what every other tool
+// that says a number means, and the README records it as a choice
+// rather than a specification.
+
+use image
+
+// Whether a JPEG's scans refine the whole image or complete it block
+// by block.
+//
+// ```novo
+// use jpegcodec
+//
+// fn main() [io]
+//     println("${jpegcodec.mode_name(JpegProgressive)}")   // progressive
+// ```
+pub enum JpegMode
+    // One scan, left to right and top to bottom, each MCU finished
+    // before the next begins.  Decodable as it arrives, and what a
+    // camera writes.
+    JpegBaseline
+    // Several scans, each adding precision to the whole image.  Shows
+    // a blurry picture early and is typically five to fifteen per cent
+    // smaller — and cannot be decoded until the last scan has arrived,
+    // which is why nothing in this package streams.
+    JpegProgressive
+
+// The name of a mode, for a message.
+//
+// ```novo
+// use jpegcodec
+//
+// fn main() [io]
+//     println("${jpegcodec.mode_name(JpegBaseline)}")      // baseline
+// ```
+pub fn mode_name(m: JpegMode) -> Str
+    todo("image-nv.jpegcodec.mode_name")
+
+// How much the two colour channels are shrunk relative to brightness.
+//
+// JPEG converts RGB to Y (brightness) and Cb/Cr (colour), and then
+// throws colour resolution away, because the eye has far less of it
+// than it has for brightness.  The names are the ratios everyone uses
+// and nobody can parse: the three numbers are a 4-pixel-wide reference
+// block, how many colour samples its first row has, and how many its
+// second row has that differ from the first.
+//
+// ```novo
+// use jpegcodec
+//
+// fn main() [io]
+//     println("${jpegcodec.chroma_name(Chroma420)}")       // 4:2:0
+// ```
+pub enum ChromaSubsampling
+    // 4:4:4 — no subsampling.  The largest files and the only setting
+    // that keeps a hard colour edge, which is why a screenshot with
+    // coloured text needs it and a photograph does not.
+    Chroma444
+    // 4:2:2 — colour at half horizontal resolution.  What broadcast
+    // video uses.
+    Chroma422
+    // 4:2:0 — colour at half resolution in both directions.  The
+    // default of almost every encoder, and the one that makes red text
+    // on a white background look smeared.
+    Chroma420
+    // 4:0:0 — no colour channels at all: a greyscale JPEG.  Encoding a
+    // colour image at this setting discards its colour, so
+    // `jpegcodec.encode` refuses it for a non-grey image rather than
+    // doing that silently.
+    Chroma400
+
+// The name of a subsampling, for a message.
+//
+// The `4:2:0` spelling, which is what every tool and every
+// specification uses.
+//
+// ```novo
+// use jpegcodec
+//
+// fn main() [io]
+//     println("${jpegcodec.chroma_name(Chroma444)}")       // 4:4:4
+// ```
+pub fn chroma_name(c: ChromaSubsampling) -> Str
+    todo("image-nv.jpegcodec.chroma_name")
+
+// How many pixels of brightness share one pair of colour samples,
+// horizontally and vertically.
+//
+// `(1, 1)` for 4:4:4, `(2, 1)` for 4:2:2, `(2, 2)` for 4:2:0, and
+// `(0, 0)` for 4:0:0, which has no colour samples to share.  The two
+// numbers are what decide an MCU's size and therefore how a decoder's
+// loop is written.
+//
+// ```novo
+// use jpegcodec
+//
+// fn main() [io]
+//     let (h, v) = jpegcodec.chroma_ratio(Chroma420)
+//     println("${h}")                                      // 2
+// ```
+pub fn chroma_ratio(c: ChromaSubsampling) -> (Int, Int)
+    todo("image-nv.jpegcodec.chroma_ratio")
+
+// What a caller may choose about how a JPEG is written.
+//
+// ```novo
+// use jpegcodec
+//
+// fn main() [io]
+//     println("${jpegcodec.default_options().quality}")    // 85
+// ```
+pub struct JpegOptions
+    // `1 ..= 100`, on libjpeg's scale.  Not a specification: the
+    // number selects a scaling of libjpeg's own quantisation tables,
+    // and every encoder's tables are different, so a "quality 85" file
+    // from this package and one from Photoshop are not the same file.
+    // 85 is the value almost every tool defaults to and is where the
+    // size curve flattens.
+    quality: Int
+    // Baseline or progressive.  Progressive is typically five to
+    // fifteen per cent smaller and cannot be decoded until the last
+    // scan arrives.
+    mode: JpegMode
+    // How much colour resolution to discard.
+    chroma: ChromaSubsampling
+    // Whether to compute optimal Huffman tables from the image rather
+    // than using the specification's example tables.  Two to six per
+    // cent smaller, and a second pass over the coefficients — which is
+    // the trade every encoder offers and none of them defaults to.
+    optimize_huffman: Bool
+
+// The options a caller who has no opinion should use.
+//
+// Quality 85, baseline, 4:2:0, no Huffman optimisation — which is
+// what almost every tool in the world does by default, and is the
+// right choice for a photograph.
+//
+// It is the WRONG choice for a screenshot with coloured text, where
+// 4:2:0 smears the edges: that wants `Chroma444` and a higher quality,
+// or PNG.
+//
+// ```novo
+// use jpegcodec
+//
+// fn main() [io]
+//     println("${jpegcodec.chroma_name(jpegcodec.default_options().chroma)}")   // 4:2:0
+// ```
+pub fn default_options() -> JpegOptions
+    todo("image-nv.jpegcodec.default_options")
+
+// Options at a named quality, with everything else defaulted.
+//
+// `Err(ImgBadArgument)` outside `1 ..= 100`.  A checked constructor
+// rather than a struct literal, because a quality of 0 or 200 is the
+// mistake a caller makes with a number from a command line, and a
+// silent clamp would produce a file they did not ask for.
+//
+// ```novo
+// use jpegcodec
+//
+// fn main() [io]
+//     match jpegcodec.at_quality(101)
+//         Ok(_)  => println("accepted")
+//         Err(_) => println("out of range")                // this one
+// ```
+pub fn at_quality(q: Int) -> Result<JpegOptions, ImageError>
+    todo("image-nv.jpegcodec.at_quality")
+
+// What a JPEG's headers say about it, without decoding its pixels.
+//
+// ```novo
+// use jpegcodec
+//
+// fn main() [io]
+//     match jpegcodec.read_info(bytes.zeros(0))
+//         Ok(i)  => println("${i.width}")
+//         Err(_) => println("not a JPEG")                  // this one
+// ```
+pub struct JpegInfo
+    // Width in pixels.
+    width: Int
+    // Height in pixels.
+    height: Int
+    // Baseline or progressive, read from the frame marker.
+    mode: JpegMode
+    // The subsampling the file uses, read from the frame's component
+    // sampling factors.
+    chroma: ChromaSubsampling
+    // How many components the frame declares: 1 for greyscale, 3 for
+    // colour, 4 for a CMYK JPEG.
+    components: Int
+
+// Whether a buffer starts with a JPEG's marker.
+//
+// `FF D8` — the Start Of Image marker, and the shortest magic of the
+// three formats this package reads, which is why `imagefmt.sniff`
+// checks it last: two bytes is a weak claim, and a buffer that is also
+// a PNG or a QOI should be recognised as one of those first.
+//
+// ```novo
+// use jpegcodec
+//
+// fn main() [io]
+//     println("${jpegcodec.is_jpeg(bytes.zeros(2))}")      // false
+// ```
+pub fn is_jpeg(src: Bytes) -> Bool
+    todo("image-nv.jpegcodec.is_jpeg")
+
+// Read a JPEG's headers without decoding its pixels.
+//
+// Reads as far as the first frame marker, which for almost every file
+// is within the first few hundred bytes.
+//
+// ```novo
+// use jpegcodec
+//
+// fn main() [io]
+//     match jpegcodec.read_info(bytes.zeros(16))
+//         Ok(_)  => println("read")
+//         Err(_) => println("not a JPEG")                  // this one
+// ```
+pub fn read_info(src: Bytes) -> Result<JpegInfo, ImageError>
+    todo("image-nv.jpegcodec.read_info")
+
+// Decode a whole JPEG held in memory.
+//
+// Whole-buffer in both directions, because progressive JPEG cannot be
+// streamed — see this module's header.  A greyscale file decodes to
+// `PixLuma8` and a colour one to `PixRgb8`; JPEG has no alpha, so no
+// kind with one is ever produced.
+//
+// A CMYK JPEG — four components, which Adobe's tools write — is
+// refused with `ImgJpegFailed` rather than converted, because the
+// conversion needs an ICC profile this package cannot read and the
+// naive one is visibly wrong.
+//
+// ```novo
+// use jpegcodec
+//
+// fn main() [io]
+//     match jpegcodec.decode(bytes.zeros(0))
+//         Ok(_)  => println("decoded")
+//         Err(_) => println("not a JPEG")                  // this one
+// ```
+pub fn decode(src: Bytes) -> Result<Image, ImageError>
+    todo("image-nv.jpegcodec.decode")
+
+// Encode an image as a JPEG.
+//
+// The image must be `PixLuma8` or `PixRgb8`: JPEG has no alpha and no
+// 16-bit mode, and an image with either is refused with
+// `ImgFormatCannotCarry` rather than being converted silently.
+// `imagecodec.kind_for` says what to convert to.
+//
+// `Chroma400` on a colour image is refused for the same reason — it
+// would discard the colour — and `Chroma444` on a greyscale one is
+// accepted and means nothing, because there are no colour channels to
+// subsample.
+//
+// ```novo
+// use jpegcodec
+// use image
+//
+// fn main() [io]
+//     match jpegcodec.encode(image.new(8, 8, PixRgb8), jpegcodec.default_options())
+//         Ok(_)  => println("encoded")                     // this one
+//         Err(_) => println("refused")
+// ```
+pub fn encode(img: Image, o: JpegOptions) -> Result<Bytes, ImageError>
+    todo("image-nv.jpegcodec.encode")

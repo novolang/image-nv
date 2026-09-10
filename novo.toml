@@ -1,0 +1,67 @@
+[package]
+name        = "image-nv"
+version     = "0.0.1"
+description = "The multi-format front over novo-lang's image codecs: a decoded image as dimensions, a colour model and a flat buffer; decode dispatching on the bytes' magic and encode on a format named with its own options; PNG and QOI through the packages that own them and JPEG here; and the operations a notebook needs — resize with a named filter, crop, rotate by right angles, flip, composite and convert between colour models."
+license     = "Apache-2.0"
+
+# An INTERFACE release: every `pub fn` body is a `todo()`, so the
+# signatures and the effect rows are published and nothing is
+# implemented.  `novo pkg publish` recognises the shape and requires
+# both the draft stability and the 0.0.x version; the first
+# implementation is the 0.1.0 published over it.
+stability   = "draft"
+
+# `core`.  Everything here is arithmetic over bytes the caller already
+# holds: the front sniffs a magic and hands the rest to a codec, and
+# the operations are resampling kernels over a buffer.  The one
+# function that meets a stream stays inside the budget by BINDING its
+# cost rather than spending one:
+# `imagecodec.read_all<S: Read[e]>(…) -> … [e]` is charged whatever the
+# caller's impl supplies (SPEC § 5.6).
+#
+# No device claim: this package is the front over three codecs and a
+# resampler, and a microcontroller wants qoi-nv or color-nv directly.
+layer       = "core"
+
+# `science`, from the must-have plan's row — this is the package a
+# notebook adds when it needs to open a picture, and it sits with
+# ndarray-nv and dataframe-nv rather than with the format packages.
+# png-nv, qoi-nv and color-nv are `graphics`: they are the format and
+# the colour, and this is what a notebook calls.
+category    = "science"
+
+tags        = ["image", "png", "jpeg", "qoi", "codec", "resize", "thumbnail", "pillow", "libjpeg-turbo", "sans-io"]
+repository  = "https://github.com/novolang/image-nv"
+maintainers = ["novo-lang"]
+novo        = ">= 0.8.9"
+
+# A library: no `main`, so `novo pkg build` type-checks and
+# effect-checks every module under `src/` and writes no binary.
+
+[docs.pages]
+"README.md" = "One front over PNG, JPEG and QOI, and the operations a notebook needs"
+
+[dependencies]
+# THE FRONT DEPENDS ON THE FORMATS; IT DOES NOT CONTAIN THEM.
+#
+# The must-have plan gives png-nv "the format on its own" and this
+# package "the multi-format front", and the honest reading of those two
+# rows is a dependency.  Two PNG codecs in one registry is one codec
+# and a copy that is always slightly behind it — and, decisively, they
+# are not the same package: a program that only reads PNG should not
+# acquire a JPEG decoder, an Adam7 composer and a Lanczos resampler to
+# do it.
+#
+# JPEG is the exception and it is declared HERE, in `jpegcodec.nv`,
+# because the plan's row for this package names it.  If the
+# implementation lane finds it wants a package of its own, the change
+# is a `jpeg-nv` row and one variant of `ImageError` becoming a
+# wrapper.
+#
+# All three are PATHS while this lane develops them together; the
+# coordinator converts each to `^0.0.1` before publish, and publishes
+# them in dependency order — color-nv, then qoi-nv and png-nv, then
+# this.
+png-nv   = { path = "../png-nv" }
+qoi-nv   = { path = "../qoi-nv" }
+color-nv = "^0.0.1"

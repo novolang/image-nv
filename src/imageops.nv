@@ -1,0 +1,322 @@
+// imageops.nv — the operations a notebook, a thumbnailer or a plot
+// needs after an image is decoded.
+//
+// EVERY RESAMPLING FILTER HERE WORKS ON LIGHT
+//
+// A resize is a weighted average of pixels, and averaging encoded sRGB
+// is averaging the wrong numbers: halfway between black and white in
+// encoded space is 188, and halfway between them in light is 128.  The
+// symptom is that a photograph shrunk in encoded space comes out
+// visibly too dark, and a thin bright line on a dark background
+// disappears entirely.  So every filter in this module DECODES to
+// linear light, resamples, and re-encodes — using color-nv's transfer
+// function, which is why this package depends on it.
+//
+// The exception, and it is deliberate: `RfNearest` copies a pixel
+// rather than averaging any, so there is nothing to decode.  That is
+// what makes it the right filter for a palette-like image or pixel art
+// and the wrong one for a photograph.
+//
+// ALPHA IS PREMULTIPLIED BEFORE A RESIZE AND UNPREMULTIPLIED AFTER
+//
+// Averaging unassociated colour across a transparency boundary pulls
+// the invisible pixel's colour into the visible one — which is where
+// the dark or white fringe around a resized cut-out comes from.
+// `colormix.premultiply` and its inverse are what this module uses, and
+// this comment is the disclosure that it happens without being asked.
+//
+// THE ROTATIONS ARE RIGHT ANGLES AND NOTHING ELSE
+//
+// A rotation by 90, 180 or 270 degrees moves every pixel to another
+// pixel exactly — no resampling, no interpolation, no loss.  A
+// rotation by anything else is a resampling operation with its own
+// filter choice, its own edge policy and its own output size, and it
+// belongs with an affine transform rather than beside `flip`.  This
+// package does the exact ones; the general one is raster-nv's when
+// that row is filled.
+
+use image
+
+// How the pixels of a resize are combined.
+//
+// The four here span the useful range: nearest for pixel art, box for
+// a fast downscale, Catmull-Rom for a general photograph, Lanczos-3
+// for the sharpest downscale that is still worth its cost.  A caller
+// with no opinion wants `RfCatmullRom`.
+//
+// ```novo
+// use imageops
+//
+// fn main() [io]
+//     println("${imageops.filter_name(RfNearest)}")        // nearest
+// ```
+pub enum ResizeFilter
+    // Take the nearest source pixel and copy it.  No averaging, so no
+    // colour space question and no new colours at all — which is what
+    // makes it right for pixel art, a palette-like image and a
+    // nearest-neighbour zoom, and wrong for a photograph.
+    RfNearest
+    // Average every source pixel that falls inside the destination
+    // pixel's footprint.  The cheapest correct downscale, and for an
+    // exact integer ratio it is also the best one; for an upscale it
+    // is nearest with extra steps.
+    RfBox
+    // A cubic with a small negative lobe — Mitchell's B = 0, C = 0.5.
+    // Sharper than a box and without a box's blocking; the general
+    // answer for a photograph.
+    RfCatmullRom
+    // A windowed sinc over three lobes.  The sharpest of the four and
+    // the slowest, with visible ringing on a hard edge — which is why
+    // it is offered rather than made the default.
+    RfLanczos3
+
+// The name of a filter, for a message or a command line.
+//
+// `nearest`, `box`, `catmull-rom`, `lanczos3` — the spellings
+// ImageMagick and every other tool use, so a caller porting a command
+// line keeps its vocabulary.
+//
+// ```novo
+// use imageops
+//
+// fn main() [io]
+//     println("${imageops.filter_name(RfLanczos3)}")       // lanczos3
+// ```
+pub fn filter_name(f: ResizeFilter) -> Str
+    todo("image-nv.imageops.filter_name")
+
+// Whether a filter averages source pixels, and therefore needs the
+// transfer function undone first.
+//
+// False only for `RfNearest`.  Exposed because it is the fact that
+// decides whether a resize is expensive and whether it can introduce a
+// colour the source did not contain — both of which a caller choosing
+// a filter is actually asking about.
+//
+// ```novo
+// use imageops
+//
+// fn main() [io]
+//     println("${imageops.filter_averages(RfNearest)}")    // false
+// ```
+pub fn filter_averages(f: ResizeFilter) -> Bool
+    todo("image-nv.imageops.filter_averages")
+
+// A rotation by a right angle.
+//
+// Clockwise, because that is what every photo viewer's rotate button
+// means and what an EXIF orientation tag describes.  Anything that is
+// not a right angle is not here — see this module's header.
+//
+// ```novo
+// use imageops
+//
+// fn main() [io]
+//     println("${imageops.rotation_degrees(Rot270)}")      // 270
+// ```
+pub enum Rotation
+    // A quarter turn clockwise.  The output's width is the input's
+    // height.
+    Rot90
+    // A half turn.  The dimensions are unchanged.
+    Rot180
+    // Three quarters clockwise, which is a quarter anticlockwise.  The
+    // output's width is the input's height.
+    Rot270
+
+// A rotation's angle in degrees, clockwise.
+//
+// ```novo
+// use imageops
+//
+// fn main() [io]
+//     println("${imageops.rotation_degrees(Rot90)}")       // 90
+// ```
+pub fn rotation_degrees(r: Rotation) -> Int
+    todo("image-nv.imageops.rotation_degrees")
+
+// Which axis a flip mirrors across.
+//
+// The names describe what MOVES, which is the convention that trips
+// people: `FlipHorizontal` swaps left and right, so a pixel's x
+// changes and its y does not.
+//
+// ```novo
+// use imageops
+//
+// fn main() [io]
+//     println("${imageops.axis_name(FlipHorizontal)}")     // horizontal
+// ```
+pub enum FlipAxis
+    // Left becomes right; x is mirrored.
+    FlipHorizontal
+    // Top becomes bottom; y is mirrored.
+    FlipVertical
+
+// The name of an axis, for a message.
+//
+// ```novo
+// use imageops
+//
+// fn main() [io]
+//     println("${imageops.axis_name(FlipVertical)}")       // vertical
+// ```
+pub fn axis_name(a: FlipAxis) -> Str
+    todo("image-nv.imageops.axis_name")
+
+// An image resampled to new dimensions.
+//
+// The aspect ratio is NOT preserved: this resizes to exactly what was
+// asked for, and `fit_within` is the call that preserves it.  Two
+// functions rather than a flag, because a caller always knows which of
+// the two they mean and a flag would make them read a sentence to find
+// out.
+//
+// Every filter but `RfNearest` resamples in linear light with
+// premultiplied alpha — see this module's header for why both matter.
+//
+// `Err(ImgBadArgument)` for a width or height below 1.
+//
+// ```novo
+// use imageops
+// use image
+//
+// fn main() [io]
+//     match imageops.resize(image.new(4, 4, PixRgba8), 2, 2, RfCatmullRom)
+//         Ok(out) => println("${out.width}")               // 2
+//         Err(_)  => println("refused")
+// ```
+pub fn resize(img: Image, width: Int, height: Int, f: ResizeFilter) -> Result<Image, ImageError>
+    todo("image-nv.imageops.resize")
+
+// An image resampled to fit inside a box, keeping its aspect ratio.
+//
+// The thumbnail call.  The result is as large as it can be without
+// exceeding either bound, so a 100×50 image into a 40×40 box becomes
+// 40×20.  It never ENLARGES: an image already inside the box comes
+// back unchanged, because scaling a small image up to fill a thumbnail
+// slot is a decision a caller should make explicitly with `resize`.
+//
+// ```novo
+// use imageops
+// use image
+//
+// fn main() [io]
+//     match imageops.fit_within(image.new(100, 50, PixRgb8), 40, 40, RfCatmullRom)
+//         Ok(out) => println("${out.height}")              // 20
+//         Err(_)  => println("refused")
+// ```
+pub fn fit_within(img: Image, width: Int, height: Int, f: ResizeFilter) -> Result<Image, ImageError>
+    todo("image-nv.imageops.fit_within")
+
+// A rectangular region of an image, as an image of its own.
+//
+// `x` and `y` are the top-left corner in the source.  The rectangle
+// must lie entirely inside the image: a crop that runs off the edge is
+// `Err(ImgBadArgument)` rather than being clipped, because a caller
+// who computed a rectangle that leaves the image has a bug, and
+// silently returning a smaller image than they asked for hides it.
+//
+// ```novo
+// use imageops
+// use image
+//
+// fn main() [io]
+//     match imageops.crop(image.new(4, 4, PixRgb8), 1, 1, 2, 2)
+//         Ok(out) => println("${out.width}")               // 2
+//         Err(_)  => println("refused")
+// ```
+pub fn crop(img: Image, x: Int, y: Int, width: Int, height: Int) -> Result<Image, ImageError>
+    todo("image-nv.imageops.crop")
+
+// An image rotated by a right angle, clockwise.
+//
+// Lossless: every pixel moves to another pixel and nothing is
+// resampled.  `Rot90` and `Rot270` swap the dimensions.
+//
+// This cannot fail, which is why it does not return a `Result` — a
+// right-angle rotation of any image is another image, and there is no
+// argument to get wrong.
+//
+// ```novo
+// use imageops
+// use image
+//
+// fn main() [io]
+//     println("${imageops.rotate(image.new(4, 2, PixRgb8), Rot90).width}")      // 2
+// ```
+pub fn rotate(img: Image, r: Rotation) -> Image
+    todo("image-nv.imageops.rotate")
+
+// An image mirrored across an axis.
+//
+// Lossless, and it cannot fail, for the same reason `rotate` cannot.
+//
+// ```novo
+// use imageops
+// use image
+//
+// fn main() [io]
+//     println("${imageops.flip(image.new(4, 2, PixRgb8), FlipVertical).height}")    // 2
+// ```
+pub fn flip(img: Image, a: FlipAxis) -> Image
+    todo("image-nv.imageops.flip")
+
+// An image converted to another pixel kind.
+//
+// The colour-model conversion, and the one operation in this module
+// that can lose information on purpose:
+//
+//   * **RGB to grey** takes the luminance in LINEAR LIGHT — the
+//     0.2126 / 0.7152 / 0.0722 weights — and not the mean of three
+//     encoded channels.  The mean is the common shortcut and it makes
+//     reds far too light and blues far too dark.
+//   * **Dropping alpha** does NOT composite onto anything.  There is
+//     no background colour to composite against, so a half-transparent
+//     pixel keeps its own colour at full strength.  A caller who wants
+//     it composited does that first, with `colormix.over` against the
+//     background they actually have.
+//   * **Adding alpha** fills 255: opaque.
+//   * **16 bits to 8** narrows by taking the high byte, which is
+//     exactly `n / 257` and keeps 0xFFFF at 255.  Taking the high byte
+//     alone — `n >> 8` — is the same thing and both are right; taking
+//     `n / 256` is not, and makes white 254.
+//   * **8 bits to 16** widens by `n * 257`, so 255 becomes 0xFFFF
+//     exactly and the round trip is the identity.
+//
+// Converting to the kind an image already has answers it unchanged and
+// copies nothing.
+//
+// ```novo
+// use imageops
+// use image
+//
+// fn main() [io]
+//     let g = imageops.convert(image.new(2, 2, PixRgba8), PixLuma8)
+//     println("${image.byte_size(g)}")                     // 4
+// ```
+pub fn convert(img: Image, k: PixelKind) -> Image
+    todo("image-nv.imageops.convert")
+
+// An image with another composited over it at a position.
+//
+// Porter–Duff `over` in linear light, per color-nv's `colormix.over`,
+// clipped to the destination — a source that hangs off the edge draws
+// the part that fits rather than failing, because a compositor is
+// asked to draw at edges constantly and a `Result` at every call would
+// be noise.
+//
+// The destination's kind is kept and the source is converted to it, so
+// compositing an RGBA sprite onto a `PixRgb8` canvas is a blend and
+// not a widening.
+//
+// ```novo
+// use imageops
+// use image
+//
+// fn main() [io]
+//     let dst = image.new(8, 8, PixRgba8)
+//     println("${imageops.overlay(dst, image.new(2, 2, PixRgba8), 1, 1).width}")    // 8
+// ```
+pub fn overlay(dst: Image, src: Image, x: Int, y: Int) -> Image
+    todo("image-nv.imageops.overlay")

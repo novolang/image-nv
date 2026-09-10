@@ -1,0 +1,146 @@
+// imageerror.nv — what can go wrong at the multi-format front, and
+// what it does with what the format codecs said.
+//
+// THE FRONT ADDS THREE FAILURES AND FORWARDS THE REST
+//
+// Almost everything that can go wrong with an image goes wrong inside
+// one format's codec, and those errors are already good: png-nv's name
+// the chunk and the offset, qoi-nv's name the pixel count.  Wrapping
+// them in a message of this package's own would be losing information
+// to gain a sentence, so `ImgPngFailed` and `ImgQoiFailed` carry them
+// WHOLE and unmodified.
+//
+// What this package adds is the three failures only a front can have:
+// the bytes are no format it knows, the caller asked for a format that
+// cannot do what they asked, and an operation on a decoded image was
+// given arguments that make no sense.
+//
+// WHY JPEG'S ERRORS ARE THIS PACKAGE'S OWN
+//
+// PNG and QOI are separate packages with their own error types.  JPEG
+// is implemented here, so its errors are `ImgJpegFailed` with a reason
+// and an offset rather than a type of their own — and if JPEG becomes
+// its own package, that variant becomes a wrapper like the other two
+// and the change is one variant wide.  The README says why JPEG lives
+// here.
+
+// Why an image could not be read, written or transformed.
+//
+// The names are prefixed `Img…` because a variant constructor resolves
+// by NAME across the whole assembly rather than by the type an
+// expression requires, so an unprefixed `UnknownFormat` here would
+// collide with the first other package that wanted one.
+//
+// ```novo
+// use imageerror
+//
+// fn main() [io]
+//     println("${imageerror.is_format_failure(ImgUnknownFormat(0))}")   // true
+// ```
+pub enum ImageError
+    // The first bytes are none of the formats this package reads.
+    // `offset` is 0 — it is always 0 — and the field is there so that
+    // every variant answers `offset_of` the same way.
+    ImgUnknownFormat(offset: Int)
+    // Fewer bytes than `imagefmt.magic_length` needs.  Distinct from
+    // `ImgUnknownFormat` because more bytes would settle it: this is
+    // the one a caller sniffing a stream retries.
+    ImgTooShortToSniff(offset: Int, len: Int)
+    // png-nv refused the file.  Its error, unmodified: it names the
+    // chunk, the offset and the reason, and this package has nothing
+    // to add to any of them.
+    ImgPngFailed(cause: PngError)
+    // qoi-nv refused the file.  Its error, unmodified.
+    ImgQoiFailed(cause: QoiError)
+    // The JPEG codec refused the file.  A reason and an offset rather
+    // than a type of its own, because JPEG is implemented in this
+    // package; if it moves to one of its own this becomes a wrapper
+    // like the two above.
+    ImgJpegFailed(offset: Int, reason: Str)
+    // The caller asked to write a format that cannot represent
+    // something the image has — an alpha channel as JPEG, 16-bit
+    // samples as QOI.  `lost` names what would be thrown away, so the
+    // message can say it.
+    //
+    // This is a REFUSAL rather than a silent conversion, which is the
+    // decision worth arguing with: `imagecodec.encode` will not drop a
+    // caller's alpha to fit a format.  A caller who meant to converts
+    // with `imageops.convert` first, and the conversion is then in
+    // their code where they can see it.
+    ImgFormatCannotCarry(fmt: Str, lost: Str)
+    // An operation was given arguments outside the image — a crop
+    // rectangle that leaves it, a resize to zero, a rotation by
+    // something that is not a right angle.  `what` names the
+    // operation.
+    ImgBadArgument(what: Str, reason: Str)
+    // The samples buffer is not the size the dimensions and the pixel
+    // kind require.  A caller's arithmetic error, caught at the
+    // boundary rather than as an out-of-range read three calls later.
+    ImgBadBufferSize(want: Int, got: Int)
+    // The image is larger than the bound the caller gave
+    // `imagecodec.decode_bounded`, or larger than this package's
+    // arithmetic can size a buffer for.  The decompression-bomb
+    // refusal, at the front where a caller set the bound.
+    ImgImageTooLarge(width: Int, height: Int, cap: Int)
+    // The stream underneath `imagecodec.read_all` failed.  The host's
+    // error, unmodified.
+    ImgSourceFailed(cause: IoError)
+
+// `Result<T, ImageError>` requires this impl — SPEC § 3.4 makes
+// `Error` the bound on a result's error type — so it exists whether or
+// not an interface release has anything to say yet.
+impl Error for ImageError
+    // Panics with `not implemented` until the bodies land.
+    fn message(self) -> Str
+        todo("image-nv.ImageError.message")
+
+// The offset into the file the error is about, or `-1` when it is not
+// about a place in one.
+//
+// For a wrapped error this is the wrapped offset — png-nv's or
+// qoi-nv's, in their own file — so a caller printing a position does
+// not have to know which codec produced it.  `-1` for the argument
+// errors and for a source failure, none of which are about a byte.
+//
+// ```novo
+// use imageerror
+//
+// fn main() [io]
+//     let e = ImgBadArgument("crop", "the rectangle leaves the image")
+//     println("${imageerror.offset_of(e)}")               // -1
+// ```
+pub fn offset_of(e: ImageError) -> Int
+    todo("image-nv.imageerror.offset_of")
+
+// Whether the fault is in the FILE rather than in the call.
+//
+// True for the three wrapped codec errors and for the two sniffing
+// ones; false for a bad argument, a bad buffer size and a format that
+// cannot carry what was asked — those are the caller's, and a program
+// that logged them as "corrupt image" would be blaming the wrong
+// thing.
+//
+// ```novo
+// use imageerror
+//
+// fn main() [io]
+//     println("${imageerror.is_format_failure(ImgUnknownFormat(0))}")   // true
+// ```
+pub fn is_format_failure(e: ImageError) -> Bool
+    todo("image-nv.imageerror.is_format_failure")
+
+// Whether more bytes could help.
+//
+// True for `ImgTooShortToSniff`, for a source failure, and for a
+// wrapped error whose own codec says its stream was truncated.  The
+// one question a caller deciding whether to retry is asking, forwarded
+// through the wrappers so they do not have to unwrap to ask it.
+//
+// ```novo
+// use imageerror
+//
+// fn main() [io]
+//     println("${imageerror.needs_more_bytes(ImgTooShortToSniff(0, 2))}")   // true
+// ```
+pub fn needs_more_bytes(e: ImageError) -> Bool
+    todo("image-nv.imageerror.needs_more_bytes")
