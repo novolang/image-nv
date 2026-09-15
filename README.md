@@ -1,241 +1,285 @@
 # image-nv
 
-**Status: NOT IMPLEMENTED — interface only.**
+A raster image is a rectangle of pixels. An image file stores that
+rectangle compressed, in one of several formats. This package is the
+front over those formats for novo-lang: it recognises a file from its
+own first bytes, decodes it into one in-memory shape, offers the
+operations a thumbnailer or a notebook performs on it, and writes it
+back out. Its references are the Rust crate
+[image](https://docs.rs/image) and Python's
+[Pillow](https://pillow.readthedocs.io/) for the interface, and
+[libjpeg-turbo](https://libjpeg-turbo.org/) for JPEG.
 
-Every public function below is published with its signature and its
-effect row, and every body is `todo()`. Installing this package works;
-calling it panics with `not implemented`.
+PNG comes from [png-nv](https://novo-lang.org/packages/png-nv) and QOI
+from [qoi-nv](https://novo-lang.org/packages/qoi-nv). JPEG is here.
+Colours are [color-nv](https://novo-lang.org/packages/color-nv)'s.
 
-## What this is
+**Status: NOT IMPLEMENTED — interface only.** Every function is declared
+with its full signature, but every body is a `todo()` that panics when
+called. The package is published so its design can be reviewed and
+depended on before it is implemented. Version 0.1.0 will be the first
+working release.
 
-The front over novo-lang's image codecs. A decoded image is dimensions,
-a colour model and a flat buffer of samples; `decode` dispatches on the
-bytes' own magic and `encode` on a format the caller named together
-with that format's options; and beside those sit the operations a
-notebook or a thumbnailer needs — resize with a named filter, fit
-inside a box, crop, rotate by a right angle, flip, composite, and
-convert between colour models.
+## What an image is here
 
-PNG and QOI come from [png-nv](https://github.com/novolang/png-nv) and
-[qoi-nv](https://github.com/novolang/qoi-nv). JPEG is here.
+An `Image` is four things: a width, a height, a **pixel kind**, and a
+flat buffer of bytes. Rows run one after another with no padding, so the
+**stride**, the number of bytes in one row, is exactly the width times
+the bytes in one pixel.
+
+A **pixel kind** says how to read the buffer: how many **channels** a
+pixel has and how many bits each one holds. A channel is one number per
+pixel, such as the red one. **Alpha** is a channel saying how opaque the
+pixel is.
+
+| Kind | Channels | Bits per channel |
+| --- | --- | --- |
+| `PixLuma8` | grey | 8 |
+| `PixLumaAlpha8` | grey, alpha | 8 |
+| `PixRgb8` | red, green, blue | 8 |
+| `PixRgba8` | red, green, blue, alpha | 8 |
+| `PixLuma16` | grey | 16, big-endian |
+| `PixLumaAlpha16` | grey, alpha | 16, big-endian |
+| `PixRgb16` | red, green, blue | 16, big-endian |
+| `PixRgba16` | red, green, blue, alpha | 16, big-endian |
+
+A **format** is a file format. Three are supported.
+
+| Format | Lossless | Alpha | Codec |
+| --- | --- | --- | --- |
+| `FmtPng` | yes | yes | png-nv |
+| `FmtJpeg` | no | no | this package's `jpegcodec` |
+| `FmtQoi` | yes | yes | qoi-nv |
+
+**Sniffing** is recognising a format from the first bytes of a file,
+which every one of the three begins with a distinctive pattern called a
+**magic number**.
+
+**Resampling** is computing the pixels of a resized image from the
+pixels of the original. A **filter** decides how: which source pixels
+contribute to a destination pixel, and with what weights.
+
+An 8-bit channel does not hold an amount of light. It holds an **sRGB**
+value, which is light after a curve that gives dark tones more of the
+range. Averaging those encoded numbers averages the wrong quantity:
+half-way between black and white is 188 encoded, not 128. Averaging
+in **linear light** means undoing the curve first and reapplying it
+afterwards.
+
+**Premultiplied alpha** means each colour channel has already been
+multiplied by the alpha. Resampling a cut-out without premultiplying
+blends the colour of fully transparent pixels into the edge, which shows
+as a dark fringe.
+
+## Install
 
 ```
 novo pkg add image-nv
-novo pkg build
-novo test
 ```
 
-## The one example that will work
+## Example
 
 ```novo
-use imagecodec
+use std.bytes
+use image
 use imageops
+use imagecodec
 
-fn thumbnail(file: Bytes) -> Result<Bytes, ImageError>
-    let img = imagecodec.decode(file)!
-    let small = imageops.fit_within(img, 256, 256, RfCatmullRom)!
-    imagecodec.encode(small, imagecodec.default_encoding(FmtPng))
+fn main() [io]
+    // A four-by-four image, four 8-bit channels per pixel, all zero.
+    let img = image.new(4, 4, PixRgba8)
+    println("${image.byte_size(img)} bytes, ${image.stride(img)} per row")
+
+    // Scale it to fit inside a two-by-two box, keeping the aspect ratio.
+    // Catmull-Rom averages, so the resampling happens in linear light.
+    match imageops.fit_within(img, 2, 2, RfCatmullRom)
+        Err(e) => println(e.message())
+        Ok(small) =>
+            // QOI has no encoder options at all, and it carries alpha,
+            // so this encode cannot lose a channel.
+            match imagecodec.encode(small, EncQoi)
+                Err(e)   => println(e.message())
+                Ok(file) => println("${bytes.len(file)} bytes of QOI")
 ```
 
-Any of the three formats in, a 256-pixel PNG out, the aspect ratio
-kept, and the resampling done in linear light so the result is not
-visibly darker than what went in.
+Build and test with `novo pkg build` and `novo test`. Today `novo test`
+fails on purpose: every test reaches a
+`not implemented: image-nv.<module>.<fn>` panic. The tests are the
+specification the implementation will have to satisfy.
 
-## The image-nv / png-nv decision, and the argument for it
+## What the package contains
 
-**image-nv DEPENDS on png-nv. It does not contain a second PNG codec,
-and png-nv is not folded into it.**
+| Module | Contents |
+| --- | --- |
+| `image` | The `Image` struct and the eight pixel kinds, the arithmetic over a kind, the constructors, and reading and writing one pixel or one row. |
+| `imagefmt` | The three formats: their names, their media types, their file extensions, the sniff, and what each one can carry. |
+| `imagecodec` | Decoding, with and without a named format or a wanted pixel kind and with a size cap, reading the header alone, encoding with per-format options, and reading a whole image from a source. |
+| `imageops` | Resize with a named filter, fit inside a box, crop, rotate by a right angle, flip, convert between pixel kinds, and composite one image onto another. |
+| `jpegcodec` | JPEG: the two processes, the chroma subsampling choices, the encoder options, the header information, and decode and encode. |
+| `imageerror` | Every reason a decode, an encode or an operation refuses, as one enum with ten variants, and three questions to ask of one. |
 
-The must-have plan gives png-nv "the format on its own" and image-nv
-"the multi-format front", and the honest reading of those two rows is
-a dependency. The precedent for the other answer — heapless-nv
-absorbing the ringbuf-nv row — applies where two rows turn out to be
-one thing. These are two things, and the test is that a sensible
-program wants exactly one of them:
+## How to choose an entry point
 
-- **Duplicating would leave one codec and a copy.** Whichever were
-  fixed first, the other would carry the bug, and a registry with two
-  PNG decoders in it is a registry where a reader has to ask which one
-  is maintained.
-- **Absorbing would make the smaller package unavailable.** A program
-  that only reads PNG — a favicon service, a plot renderer, a
-  screenshot differ, an icon pipeline — should not acquire a JPEG
-  decoder, an Adam7 composer and a Lanczos resampler in order to do it.
-  png-nv is `core` with two dependencies; image-nv is `core` with
-  three, one of which is png-nv. The grid exists so that a caller can
-  take the smaller one.
-- **The layers permit it.** Both are `core`, so `core` depending on
-  `core` is inside the rule, and the audit's `dep-layer` row checks it
-  on every run.
+**`imagecodec.decode` is the usual way in.** It reads the magic number
+and dispatches. `decode_as` is for a caller who already knows the
+format, and `decode_as_kind` asks the codec for a particular pixel kind
+so that a conversion pass is not needed afterwards.
 
-The same reasoning gives qoi-nv the same treatment, and for the same
-reason: QOI is a one-page format that a program embedding a fast frame
-dump wants on its own.
+**`imagecodec.read_size` reads only the header.** Take it when you want
+the dimensions of a thousand files and the pixels of none.
 
-**JPEG is the asymmetry, and it is deliberate rather than tidy.** The
-plan's row for image-nv names JPEG as this package's own
-responsibility, so `jpegcodec.nv` declares it here rather than in a
-`jpeg-nv` of its own. If the implementation lane finds that JPEG wants
-a package — and it is the largest of the three by a long way — the move
-is a new row, a dependency, and `ImgJpegFailed` becoming a wrapper like
-`ImgPngFailed`. That is a one-variant diff, and nothing else in the
-shape below changes.
+**`imagecodec.decode_bounded` caps the pixel count before allocating.**
+Take it for anything that arrives from outside the program. A small
+compressed file can declare an enormous image.
 
-## The layer, and why
+**`imagecodec.read_all` reads from a source rather than a buffer.** It
+is the only function here that declares an effect, and the effect is
+whatever the source brings: reading a file costs what a file costs, and
+reading from memory costs nothing.
 
-`core` — no effects at all. The front sniffs a magic and hands the rest
-to a codec; the operations are resampling kernels over a buffer the
-caller already holds. Nothing is opened and nothing is waited for.
+**Take png-nv or qoi-nv directly when you need one format.** A program
+that only reads PNG does not need a JPEG decoder and a Lanczos
+resampler to do it.
 
-The one function that meets a stream stays inside the budget by
-**binding** its cost rather than spending one:
+## The rules a user needs
 
-```novo
-pub fn read_all<S: Read[e]>(src: S) -> Result<Image, ImageError> [e]
+1. **A format is decided by bytes, never by a file name.** A name is a
+   claim its owner made and a magic number is a claim the encoder made.
+   `imagefmt.of_extension` exists for a caller choosing an output format
+   from a path or filling in a media type, and for nothing else.
+2. **`encode` refuses rather than dropping a channel.** Writing an image
+   with alpha as JPEG would lose the alpha, and writing a 16-bit image
+   as QOI would lose eight bits per channel. Both answer
+   `ImgFormatCannotCarry`, naming what would be lost.
+   `imagecodec.can_carry` asks in advance and `imagecodec.kind_for` says
+   what to convert to. Call `imageops.convert` first, so that the loss
+   is a line a reader can see.
+3. **Every filter but `RfNearest` averages in linear light**, and
+   premultiplies alpha before the resize and undoes it after. Neither
+   has to be asked for.
+
+   | Filter | Use it for |
+   | --- | --- |
+   | `RfNearest` | pixel art and a nearest-neighbour zoom; it invents no colours |
+   | `RfBox` | a downscale by an exact integer ratio, where it is also the best |
+   | `RfCatmullRom` | a photograph; the general answer |
+   | `RfLanczos3` | the sharpest result, at the cost of ringing on a hard edge |
+
+4. **Rotation is by right angles only.** Ninety, 180 and 270 degrees
+   move every pixel to another pixel exactly, so `imageops.rotate`
+   cannot fail and loses nothing. A rotation by any other angle is a
+   resampling operation with its own filter, its own edge policy and its
+   own output size.
+5. **A JPEG quality number follows libjpeg's scaling.** Quality 85 means
+   libjpeg's baseline quantisation tables scaled by libjpeg's formula.
+   Photoshop's 85 and a phone camera's 85 are different files.
+   `jpegcodec.at_quality` refuses a number outside the range.
+6. **JPEG defaults to 4:2:0 chroma subsampling**, which stores one
+   colour sample for every four pixels. It is right for a photograph and
+   wrong for a screenshot with coloured text, where `Chroma444` is one
+   field away.
+7. **Two conforming JPEG decoders may disagree by a level or two per
+   channel.** ITU T.81 specifies the inverse discrete cosine transform
+   as a mathematical transform and every implementation approximates it.
+   ITU T.83 sets the bound they must stay inside. A comparison against
+   another decoder is a comparison within that bound, never byte for
+   byte.
+8. **The buffer holds bytes, not colour values.** A 4K image with four
+   channels is 33 million bytes. As a list of colour values, with a heap
+   cell each, it would be several hundred megabytes and every operation
+   would walk pointers. `image.pixel` is the accessor for a caller who
+   wants one colour at one coordinate.
+9. **There is no padding between rows.** The stride is the width times
+   the bytes per pixel, so a caller who does not care about rows may
+   treat the whole buffer as one run.
+10. **An image has at least one pixel in each direction.** `image.new`
+    refuses a zero width or height.
+11. **There is no indexed pixel kind.** An indexed image is a compressed
+    form of one with full colour, and png-nv resolves the palette while
+    decoding.
+
+## What is not included
+
+- **GIF, WebP, TIFF, BMP and AVIF.** Each is a package's worth of work.
+  `ImageFormat` is where one would arrive without changing the shape of
+  `decode`.
+- **CMYK JPEGs.** Converting them needs a colour profile this package
+  cannot read, and the conversion that ignores the profile is visibly
+  wrong. They are refused.
+- **Animation.** An `Image` is one frame.
+- **Rotation by an arbitrary angle, and a general affine transform.**
+  See rule 4.
+- **A microcontroller build.** This package is a front over three codecs
+  and a resampler. A device that wants an image wants qoi-nv, and one
+  that wants a colour wants color-nv. This package makes no device claim
+  and ships no device probe.
+
+## Related packages
+
+- [png-nv](https://novo-lang.org/packages/png-nv) is the PNG format on
+  its own, and this package depends on it rather than carrying a second
+  copy. Take it directly when PNG is the only format you read.
+- [qoi-nv](https://novo-lang.org/packages/qoi-nv) is the QOI format on
+  its own. QOI is one page of specification and it builds for a
+  microcontroller, which this package does not.
+- [color-nv](https://novo-lang.org/packages/color-nv) owns the colour
+  value `image.pixel` answers and the conversions between colour spaces.
+- [flate-nv](https://novo-lang.org/packages/flate-nv) is the compression
+  underneath PNG, and arrives through png-nv.
+- [plot-nv](https://novo-lang.org/packages/plot-nv) fills one of these
+  images when a chart is drawn to a raster rather than to a document.
+- `std.net` and the standard library's file reading are where the bytes
+  come from. `imagecodec.read_all` binds whatever effect the source
+  brings.
+
+## Tests
+
+```bash
+novo test tests/image_tests.nv         # 14 tests: the struct, the kinds and the arithmetic
+novo test tests/imagecodec_tests.nv    # 28 tests: sniffing, decoding, encoding and the refusals
+novo test tests/imageops_tests.nv      # 17 tests: the operations and the filters
 ```
 
-`S: Read[e]` binds the effect parameter of the standard library's
-`Read` trait and the clause uses it, so the row means *whatever the
-impl behind `S` supplies*.
+The Rust `image` crate and Pillow are the references for the front and
+the operations. libjpeg-turbo's corpus is the oracle for JPEG, measured
+within the bound of rule 7 rather than byte for byte. PNG's and QOI's
+own conformance belongs to png-nv and qoi-nv and is tested there.
 
-**No device claim.** There is no `tests/embedded_probe.nv` and the
-audit's `core-embedded` row passes by saying so. This package is a
-front over three codecs and a resampler; a microcontroller that wants
-an image wants qoi-nv, and one that wants a colour wants color-nv.
+The suite asserts that a sniff reads bytes and not a name, that an
+encode that would lose a channel refuses and names what it would lose,
+that the stride has no padding in it, that a rotation by a right angle
+is exact, that a zero dimension is refused, and that a bounded decode
+refuses an image larger than its cap before allocating.
 
-## The load-bearing interface
+The tests compile today and fail at run, each on the
+`not implemented: image-nv.<module>.<fn>` panic that is its body. That
+is the expected state of an interface release. They turn green one at a
+time as bodies land.
 
-```novo
-pub struct Image
-    width:   Int
-    height:  Int
-    kind:    PixelKind
-    samples: Bytes
+## Implementation status
 
-pub fn decode(src: Bytes) -> Result<Image, ImageError>
-pub fn encode(img: Image, e: ImageEncoding) -> Result<Bytes, ImageError>
-```
+| Item | Implemented |
+| --- | --- |
+| `image.Image`, `.PixelKind`, `imagefmt.ImageFormat`, `imagecodec.ImageEncoding` | declared |
+| `imageops.ResizeFilter`, `.Rotation`, `.FlipAxis` | declared |
+| `jpegcodec.JpegMode`, `.ChromaSubsampling`, `.JpegOptions`, `.JpegInfo` | declared |
+| `imageerror.ImageError` | declared |
+| `image.channel_count`, `.bytes_per_sample`, `.bytes_per_pixel`, `.has_alpha`, `.is_grey`, `.with_alpha_channel` | no |
+| `image.stride`, `.byte_size`, `.new`, `.filled`, `.from_samples` | no |
+| `image.pixel`, `.with_pixel`, `.row`, `.with_row` | no |
+| `imagefmt.format_name`, `.mime_type`, `.extensions`, `.magic_length` | no |
+| `imagefmt.sniff`, `.of_extension`, `.supports_alpha`, `.is_lossless` | no |
+| `imagecodec.encoding_format`, `.encoding_name`, `.default_encoding` | no |
+| `imagecodec.decode`, `.decode_as`, `.decode_as_kind`, `.decode_bounded`, `.read_size`, `.read_all` | no |
+| `imagecodec.encode`, `.can_carry`, `.kind_for` | no |
+| `imageops.filter_name`, `.filter_averages`, `.rotation_degrees`, `.axis_name` | no |
+| `imageops.resize`, `.fit_within`, `.crop`, `.rotate`, `.flip`, `.convert`, `.overlay` | no |
+| `jpegcodec.mode_name`, `.chroma_name`, `.chroma_ratio`, `.default_options`, `.at_quality` | no |
+| `jpegcodec.is_jpeg`, `.read_info`, `.decode`, `.encode` | no |
+| `imageerror`'s ten variants, `.offset_of`, `.is_format_failure`, `.needs_more_bytes` and its `Error` implementation | no |
 
-One struct and two functions, and everything else in the package
-produces an `Image`, consumes one, or describes the enums those two
-signatures name.
+## Licence
 
-**The pixels are bytes, not colours.** A 4K RGBA image is 33 million
-bytes; as a list of colour values — one heap cell and one reference
-count per pixel — it is somewhere north of half a gigabyte, and every
-operation on it walks pointers. So `Image` holds one `Bytes` and a
-`PixelKind` that says how to read it, and `image.pixel` is the
-accessor for a caller who wants a colour at a coordinate rather than a
-buffer. This is also what makes the stack agree with itself: png-nv's
-`PngEvRow` drains raw samples and qoi-nv's decoder drains raw samples,
-and this is where they land with no conversion in between.
+Apache-2.0. See `LICENSE`.
 
-**`ImageFormat` and `ImageEncoding` are two types on purpose.** The
-first is what `sniff` answers and carries no options, because a decoder
-needs none. The second is what `encode` takes and pairs each format
-with its own options in the variant, which makes an impossible
-combination unrepresentable: there is no way to hand a JPEG quality to
-a PNG encoder, because the constructor does not admit one.
-
-## Four decisions worth arguing with
-
-**Sniffing reads bytes and never a name.** A file name is a claim its
-owner made; a magic number is a claim the encoder made. `decode`
-sniffs, always. `imagefmt.of_extension` exists for the caller who has a
-name and no bytes — choosing an output format from a path, filling in a
-`Content-Type` — and its documentation says so, because a decoder that
-trusted an extension is the classic upload vulnerability.
-
-**`encode` refuses rather than converting.** Writing an RGBA image as
-JPEG has to lose the alpha; writing a 16-bit image as QOI has to lose
-eight bits a channel. Both are `Err(ImgFormatCannotCarry)` naming what
-would have been lost, and `imagecodec.kind_for` says what to convert
-to. A caller who meant to calls `imageops.convert` first — and the
-conversion is then a line in their code that a reader can see, instead
-of a silence inside a call that looked like it was only choosing a
-container.
-
-**Every resampling filter but `RfNearest` works on light.** Averaging
-encoded sRGB averages the wrong numbers: halfway between black and
-white is 188 encoded and 128 in light, which is why a photograph shrunk
-in encoded space comes out visibly too dark and a thin bright line
-disappears. Alpha is premultiplied before a resize and unpremultiplied
-after, which is what stops the dark fringe around a resized cut-out.
-Both happen without being asked, and this paragraph is the disclosure.
-
-**Rotation is by right angles only.** 90, 180 and 270 move every pixel
-to another pixel exactly — no resampling, no loss, no `Result`. A
-rotation by any other angle is a resampling operation with its own
-filter, its own edge policy and its own output size, and it belongs
-with a general affine transform rather than beside `flip`.
-
-## The reference implementations, and what is specification
-
-Rust's `image` crate and Python's Pillow are the reference
-implementations for the front and the operations. **libjpeg-turbo is
-the reference implementation for JPEG and its corpus is the oracle**,
-which is the plan's own instruction for this row.
-
-**Specification, and binding on this package**
-
-- PNG's and QOI's formats, which are png-nv's and qoi-nv's problem and
-  are documented there.
-- JPEG: ITU T.81's baseline and progressive processes, the marker
-  structure, the DCT and the quantisation and Huffman stages, and the
-  YCbCr transform.
-- ITU T.83's conformance bound on the inverse DCT.
-
-**Choices this package makes, which a test may not treat as
-correctness**
-
-- **The quality number.** A "quality 85" JPEG is one whose
-  quantisation tables were scaled by libjpeg's formula from libjpeg's
-  own baseline tables. Photoshop's 85, MozJPEG's 85 and a phone's 85
-  are all different files. This package follows libjpeg's scaling
-  because that is what every tool that prints a number means.
-- **4:2:0 as the default subsampling.** It is what almost every
-  encoder defaults to, it is right for a photograph, and it is wrong
-  for a screenshot with coloured text — which is why `Chroma444` is
-  one field away.
-- The four resampling filters and their coefficients: Catmull-Rom is
-  Mitchell with B = 0 and C = 0.5, Lanczos is windowed at three lobes.
-  Both are conventions with no standard behind them.
-- The eight `PixelKind`s. There is no palette kind — an indexed image
-  is a compression of an RGBA one, png-nv resolves the palette, and a
-  kind that could be indexed would put a branch in every operation in
-  `imageops` for a representation only one format has.
-
-**JPEG's output is not exact, and the corpus test has to say so.** Two
-conforming JPEG decoders may disagree by a level or two per channel,
-because the inverse DCT is specified as a mathematical transform and
-every implementation approximates it — libjpeg-turbo alone ships three.
-So the measurement against the oracle is *within T.83's bound of
-libjpeg-turbo*, never *the same bytes as libjpeg-turbo*, and a test
-that asserted equality would fail on a correct implementation.
-
-**Deliberately not ported:** GIF, WebP, TIFF, BMP and AVIF — each is a
-package's worth of work, none is on the grid yet, and `ImageFormat` is
-where they would arrive without changing the shape of `decode`. CMYK
-JPEGs are refused rather than converted, because the conversion needs
-an ICC profile this package cannot read and the naive one is visibly
-wrong. Animation of any kind: `Image` is one frame, and a package that
-returned several would be a different interface.
-
-## Status
-
-Every function is `todo()`. `novo test` runs the API suite, and every
-assertion in it reaches `not implemented: image-nv.<module>.<fn>` —
-which is the expected result until the bodies land, and is what makes
-the suite a description of the interface rather than of nothing.
-`novo test --isolate tests/<file>` is the readable form: one verdict
-per test, naming the function it stopped at.
-
-| module | public types | functions | implemented |
-| --- | --- | --- | --- |
-| `image` | 2 | 15 | no |
-| `imagefmt` | 1 | 8 | no |
-| `imagecodec` | 1 | 12 | no |
-| `imageops` | 3 | 11 | no |
-| `jpegcodec` | 4 | 9 | no |
-| `imageerror` | 1 | 3 | no |
-| **total** | **12** | **58** | **no** |
+<!-- docs/writing-a-readme.md is the style guide for this page. -->

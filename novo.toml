@@ -1,6 +1,6 @@
 [package]
 name        = "image-nv"
-version     = "0.0.1"
+version     = "0.0.2"
 description = "The multi-format front over novo-lang's image codecs: a decoded image as dimensions, a colour model and a flat buffer; decode dispatching on the bytes' magic and encode on a format named with its own options; PNG and QOI through the packages that own them and JPEG here; and the operations a notebook needs — resize with a named filter, crop, rotate by right angles, flip, composite and convert between colour models."
 license     = "Apache-2.0"
 
