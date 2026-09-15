@@ -209,10 +209,10 @@ resampler to do it.
 - **Animation.** An `Image` is one frame.
 - **Rotation by an arbitrary angle, and a general affine transform.**
   See rule 4.
-- **A microcontroller build.** This package is a front over three codecs
-  and a resampler. A device that wants an image wants qoi-nv, and one
-  that wants a colour wants color-nv. This package makes no device claim
-  and ships no device probe.
+- **A microcontroller build.** This package is a front over three codecs and a
+  resampler. A device that wants an image wants qoi-nv, and one that wants a
+  colour wants color-nv. Nothing here is claimed to build for a device with no
+  heap allocator, and there is no `tests/embedded_probe.nv`.
 
 ## Related packages
 
