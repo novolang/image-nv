@@ -3,9 +3,9 @@
 [color-nv]
 source = "registry"
 url = "https://registry.novo-lang.org"
-req = "^0.0.1"
-version = "0.0.1"
-hash = "4ce79b7326161164055faeb5c8abec5e1fccb898409318b66c753e3f312e3f8b"
+req = "^0.1.1"
+version = "0.1.1"
+hash = "6e4ebf531e3f2e4e11cfe9ad8b6b087792bac7bfd4cd0d901ae7e148c30e15ae"
 
 [flate-nv]
 source = "registry"
@@ -17,13 +17,13 @@ hash = "94526969eb11b1c539e1eaad561a1036c127902eb4d4c467f9c12fc098e4790c"
 [png-nv]
 source = "registry"
 url = "https://registry.novo-lang.org"
-req = "^0.0.1"
-version = "0.0.1"
-hash = "fa0782b626556017548a6798fd328eeac552c8c6e26255b98b67111d182eda13"
+req = "^0.0.3"
+version = "0.0.3"
+hash = "e542b350e587c56a02144eecbb88c20c9dcfc77d504da1de5500a4cabdacd771"
 
 [qoi-nv]
 source = "registry"
 url = "https://registry.novo-lang.org"
-req = "^0.0.1"
-version = "0.0.1"
-hash = "888c5f3902ddb6548983366874ad4f1a5326f4b877a554f174910c44aed478ab"
+req = "^0.1.0"
+version = "0.1.0"
+hash = "e2f987b3dccc22465976df445779d997464821a7b254f979ae117be974e1a7ad"
